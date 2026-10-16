@@ -1,0 +1,81 @@
+using Application.CQRS.Goals.Requests.Commands;
+using Application.DTOS.Goal;
+using Application.Exceptions;
+using Application.Interface;
+using Application.Interface.IRepository;
+using Application.Responses;
+using MediatR;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace Application.CQRS.Goals.Handlers.Commands;
+
+public class UpdateGoalCommandHandler : IRequestHandler<UpdateGoalCommandRequest, Response<GoalDto>>
+{
+    private readonly IGoalRepository goalRepository;
+    private readonly IUnitOfWork unitOfWork;
+
+    public UpdateGoalCommandHandler(IGoalRepository _goalRepository, IUnitOfWork _unitOfWork)
+    {
+        goalRepository = _goalRepository;
+        unitOfWork = _unitOfWork;
+    }
+
+    public async Task<Response<GoalDto>> Handle(UpdateGoalCommandRequest request, CancellationToken cancellationToken)
+    {
+        var goal = await goalRepository.GetById(request.Id)
+            ?? throw new NotFoundException(nameof(Domain.Entities.Goal), request.Id);
+
+        if (!string.IsNullOrWhiteSpace(request.Name))
+        {
+            var updatedName = request.Name.Trim();
+            var duplicates = (await goalRepository.GetByScorecardAsync(goal.ScorecardId))
+                .Where(g => !g.IsDeleted && g.Id != goal.Id
+                    && string.Equals(g.Name, updatedName, StringComparison.OrdinalIgnoreCase));
+            if (duplicates.Any())
+                throw new BadRequestException($"A goal named '{updatedName}' already exists under this scorecard.");
+            goal.Name = updatedName;
+        }
+
+        if (request.Description != null)
+            goal.Description = request.Description;
+
+        if (request.Weight.HasValue)
+        {
+            // Validate total weight doesn't exceed 100% (excluding this goal)
+            var existingGoals = await goalRepository.GetByScorecardAsync(goal.ScorecardId);
+            var otherGoalsWeight = existingGoals.Where(g => g.Id != goal.Id).Sum(g => g.Weight);
+            var newWeight = request.Weight.Value;
+
+            if (otherGoalsWeight + newWeight > 100m)
+            {
+                throw new BadRequestException($"Updating this goal would bring the total goal weight to {otherGoalsWeight + newWeight:F2}% which exceeds 100%. Adjust the weight or existing goals.");
+            }
+
+            goal.Weight = newWeight;
+        }
+
+        if (request.IsActive.HasValue)
+            goal.IsActive = request.IsActive.Value;
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new Response<GoalDto>
+        {
+            Success = true,
+            Message = "Goal updated successfully.",
+            Data = new GoalDto
+            {
+                Id = goal.Id,
+                Name = goal.Name,
+                Description = goal.Description,
+                CreatedBy = goal.CreatedBy,
+                CreatedDate = goal.CreatedDate,
+                UpdatedBy = goal.UpdatedBy,
+                UpdatedDate = goal.UpdatedDate,
+                Status = goal.Status
+            }
+        };
+    }
+}
