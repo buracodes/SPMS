@@ -40,6 +40,96 @@ public class FiscalYearLifecycleGuardTests
     }
 
     [Fact]
+    public async Task Create_RejectsStartDateThatIsNotFirstOfMonth()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanCreateAsync(new CreateFiscalYearDto
+            {
+                Label = "Sep/26",
+                StartDate = new DateTime(2099, 9, 15)
+            }));
+    }
+
+    [Fact]
+    public async Task Create_RejectsEndDateThatIsNotTwelveMonths()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanCreateAsync(new CreateFiscalYearDto
+            {
+                Label = "2099/00",
+                StartDate = new DateTime(2099, 7, 1),
+                EndDate = new DateTime(2099, 12, 31)
+            }));
+    }
+
+    [Fact]
+    public async Task Create_DerivesTwelveMonthEndDateWhenOmitted()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var guard = CreateGuard(lease);
+
+        var endDate = await guard.EnsureCanCreateAsync(new CreateFiscalYearDto
+        {
+            Label = "Sep/26",
+            StartDate = new DateTime(2099, 9, 1)
+        });
+
+        Assert.Equal(new DateTime(2100, 8, 31), endDate);
+    }
+
+    [Fact]
+    public async Task Create_AllowsNonJulyStartMonth()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var guard = CreateGuard(lease);
+
+        await guard.EnsureCanCreateAsync(new CreateFiscalYearDto
+        {
+            Label = "Sep/26",
+            StartDate = new DateTime(2099, 9, 1),
+            EndDate = new DateTime(2100, 8, 31)
+        });
+    }
+
+    [Fact]
+    public async Task Create_RejectsDuplicateLabel()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        await SeedYearAsync(lease);
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanCreateAsync(new CreateFiscalYearDto
+            {
+                Label = "2099/00",
+                StartDate = new DateTime(2100, 7, 1),
+                EndDate = new DateTime(2101, 6, 30)
+            }));
+    }
+
+    [Fact]
+    public async Task Create_RejectsOverlappingCalendar()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        await SeedYearAsync(lease);
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanCreateAsync(new CreateFiscalYearDto
+            {
+                Label = "Sep/26",
+                StartDate = new DateTime(2099, 9, 1),
+                EndDate = new DateTime(2100, 8, 31)
+            }));
+    }
+
+    [Fact]
     public async Task Update_RejectsClosedYear()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
@@ -192,7 +282,9 @@ public class FiscalYearLifecycleGuardTests
             new FiscalPeriodRepository(lease.Context),
             new ScorecardRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
-            new KpiActualValueRepository(lease.Context));
+            new KpiActualValueRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            new FiscalCalendarService());
     }
 
     private static async Task<FiscalYear> SeedYearAsync(TestDbContextLease lease, bool closed = false, bool withPeriods = false)

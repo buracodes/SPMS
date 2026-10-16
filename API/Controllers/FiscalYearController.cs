@@ -1,5 +1,6 @@
 using Application.CQRS.FiscalYear.Requests;
 using Application.DTOS.FiscalYear;
+using Application.Interface;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
@@ -20,25 +21,25 @@ public class FiscalYearController : ControllerBase
 {
     private readonly IMediator mediator;
     private readonly IFiscalYearRepository repository;
-    private readonly IFiscalPeriodRepository fiscalPeriodRepository;
     private readonly IFiscalCalendarService fiscalCalendarService;
     private readonly FiscalYearLifecycleGuard lifecycleGuard;
     private readonly IBusinessClock businessClock;
+    private readonly IUnitOfWork unitOfWork;
 
     public FiscalYearController(
         IMediator _mediator,
         IFiscalYearRepository _repository,
-        IFiscalPeriodRepository _fiscalPeriodRepository,
         IFiscalCalendarService _fiscalCalendarService,
         FiscalYearLifecycleGuard _lifecycleGuard,
-        IBusinessClock _businessClock)
+        IBusinessClock _businessClock,
+        IUnitOfWork _unitOfWork)
     {
         mediator = _mediator;
         repository = _repository;
-        fiscalPeriodRepository = _fiscalPeriodRepository;
         fiscalCalendarService = _fiscalCalendarService;
         lifecycleGuard = _lifecycleGuard;
         businessClock = _businessClock;
+        unitOfWork = _unitOfWork;
     }
 
     /// <summary>
@@ -80,21 +81,25 @@ public class FiscalYearController : ControllerBase
     [Authorize(Policy = Permissions.AdminConfigManage)]
     public async Task<ActionResult<Response<FiscalYearDto>>> Create([FromBody] CreateFiscalYearDto dto)
     {
-        await lifecycleGuard.EnsureCanCreateAsync(dto);
+        var endDate = await lifecycleGuard.EnsureCanCreateAsync(dto);
 
         var entity = new FiscalYear
         {
-            Label = dto.Label,
-            StartDate = dto.StartDate,
-            EndDate = dto.EndDate,
+            Id = Guid.NewGuid(),
+            Label = dto.Label.Trim(),
+            StartDate = dto.StartDate.Date,
+            EndDate = endDate,
             FiscalYearStatus = Domain.Enums.FiscalYearStatus.Open,
             CreatedBy = Guid.Empty,
             CreatedDate = DateTime.UtcNow,
         };
-        await repository.Add(entity);
 
+        // The year and its twelve monthly periods are staged together and committed in a single
+        // SaveChanges, so a failure never leaves a year without a calendar (or vice versa).
+        await repository.AddWithoutSave(entity);
         var periods = fiscalCalendarService.GeneratePeriods(entity);
-        await fiscalPeriodRepository.AddRange(periods);
+        await unitOfWork.AddRangeAsync(periods);
+        await unitOfWork.SaveChangesAsync();
 
         return StatusCode(StatusCodes.Status201Created, new Response<FiscalYearDto>
         {
@@ -120,9 +125,16 @@ public class FiscalYearController : ControllerBase
 
         await lifecycleGuard.EnsureCanUpdateAsync(entity, dto, businessClock.BusinessDate);
 
-        entity.Label = dto.Label ?? entity.Label;
-        entity.StartDate = dto.StartDate ?? entity.StartDate;
-        entity.EndDate = dto.EndDate ?? entity.EndDate;
+        entity.Label = dto.Label?.Trim() ?? entity.Label;
+        if (dto.StartDate.HasValue || dto.EndDate.HasValue)
+        {
+            // Once the year has a period calendar the guard refuses any date change; this branch
+            // therefore only runs before periods exist. The end date is always derived from the
+            // start so it can never drift from the twelve-month rule.
+            var newStartDate = (dto.StartDate ?? entity.StartDate).Date;
+            entity.StartDate = newStartDate;
+            entity.EndDate = fiscalCalendarService.ComputeEndDate(newStartDate);
+        }
 
         await repository.Update(entity);
 

@@ -5,6 +5,18 @@ namespace Application.Services;
 
 public sealed class FiscalCalendarService : IFiscalCalendarService
 {
+    /// <summary>
+    /// A fiscal year always spans twelve consecutive calendar months. The authoritative end
+    /// date is the last day of the twelfth month, one day before the same day-of-month a year
+    /// later. Callers must not pass a start date that is not the first day of a month; that
+    /// rule is enforced by <see cref="FiscalYearLifecycleGuard"/>.
+    /// </summary>
+    public DateTime ComputeEndDate(DateTime startDate)
+    {
+        var start = startDate.Date;
+        return start.AddMonths(12).AddDays(-1);
+    }
+
     public FiscalYear CreateFiscalYear(int startYear)
     {
         if (startYear < 1)
@@ -12,12 +24,15 @@ public sealed class FiscalCalendarService : IFiscalCalendarService
             throw new ArgumentOutOfRangeException(nameof(startYear), "Fiscal year start year must be a valid Gregorian year.");
         }
 
+        // Convenience factory used by seeding and tests: a fiscal year beginning 1 July. The
+        // production create path accepts an arbitrary start month and computes its own end date.
+        var startDate = new DateTime(startYear, 7, 1);
         return new FiscalYear
         {
             Id = Guid.NewGuid(),
             Label = $"{startYear}/{(startYear + 1) % 100:00}",
-            StartDate = new DateTime(startYear, 7, 1),
-            EndDate = new DateTime(startYear + 1, 6, 30)
+            StartDate = startDate,
+            EndDate = ComputeEndDate(startDate)
         };
     }
 

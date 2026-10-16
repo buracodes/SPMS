@@ -1,4 +1,5 @@
 using Application.Services;
+using Domain.Entities;
 
 namespace Application.Tests.FiscalYears;
 
@@ -78,5 +79,52 @@ public class FiscalCalendarServiceTests
 
         Assert.Equal(new[] { 3, 6, 9, 12 }, periods.Where(p => p.IsQuarterEnd).Select(p => p.FiscalMonth).ToArray());
         Assert.Equal(12, periods.Single(p => p.IsYearEnd).FiscalMonth);
+    }
+
+    [Theory]
+    [InlineData(2025, 7, 1, 2026, 6, 30)]
+    [InlineData(2026, 9, 1, 2027, 8, 31)]
+    [InlineData(2026, 1, 1, 2026, 12, 31)]
+    [InlineData(2024, 2, 1, 2025, 1, 31)]
+    [InlineData(2025, 3, 1, 2026, 2, 28)]
+    [InlineData(2023, 3, 1, 2024, 2, 29)]
+    public void ComputeEndDate_ReturnsLastDayOfTwelfthMonth(int startYear, int startMonth, int startDay, int endYear, int endMonth, int endDay)
+    {
+        var service = new FiscalCalendarService();
+
+        var end = service.ComputeEndDate(new DateTime(startYear, startMonth, startDay));
+
+        Assert.Equal(new DateTime(endYear, endMonth, endDay), end);
+    }
+
+    [Fact]
+    public void GeneratePeriods_ForSeptemberStart_CreatesTwelveConsecutiveMonths()
+    {
+        var service = new FiscalCalendarService();
+        var startDate = new DateTime(2026, 9, 1);
+        var fiscalYear = new FiscalYear
+        {
+            Id = Guid.NewGuid(),
+            Label = "2026/27",
+            StartDate = startDate,
+            EndDate = service.ComputeEndDate(startDate)
+        };
+
+        var periods = service.GeneratePeriods(fiscalYear);
+
+        Assert.Equal(12, periods.Count);
+        Assert.Equal(new DateTime(2026, 9, 1), periods[0].StartDate);
+        Assert.Equal(new DateTime(2026, 9, 30), periods[0].EndDate);
+        Assert.Equal(1, periods[0].FiscalMonth);
+        Assert.Equal(new DateTime(2027, 8, 1), periods[11].StartDate);
+        Assert.Equal(new DateTime(2027, 8, 31), periods[11].EndDate);
+        Assert.Equal(12, periods[11].FiscalMonth);
+        Assert.Equal(4, periods[11].Quarter);
+
+        // Every period starts the day after the previous one ended: no gap, no overlap.
+        for (var i = 1; i < periods.Count; i++)
+        {
+            Assert.Equal(periods[i - 1].EndDate.AddDays(1), periods[i].StartDate);
+        }
     }
 }
