@@ -192,6 +192,15 @@ public sealed class ScoreCalculationService : IScoreCalculationService
         var contributions = new List<ScorecardScoreContribution>();
         foreach (var goal in scorecard.Goals)
         {
+            // Inactive goals are business-deactivated (toggle in FR-302 edit) and are
+            // excluded from reporting the same way, so they contribute neither score
+            // nor normalization weight to the scorecard aggregate. Missing data stays
+            // out via snapshot?.Score == null per FR-604; never coerced to zero.
+            if (!goal.IsActive)
+            {
+                continue;
+            }
+
             var snapshot = await goalSnapshotRepository.GetLatestAsync(goal.Id, fiscalPeriodId, SnapshotGranularity.Month);
             contributions.Add(new ScorecardScoreContribution(snapshot?.Score, goal.Weight));
         }

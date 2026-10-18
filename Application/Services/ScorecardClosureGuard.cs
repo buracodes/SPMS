@@ -9,11 +9,15 @@ namespace Application.Services
     /// <summary>
     /// Centralized year-end closure rule (FR-703). A scorecard is considered closed
     /// (read-only) when its own status is Closed or its fiscal year is no longer Open.
-    /// A fiscal year whose end date has already passed in ECX business time (East Africa
-    /// Time) is treated as closed even before the nightly closure job flips its status,
-    /// so the overnight window between 00:00 EAT and the job cannot expose historical
-    /// writes. Every scorecard-owned write path funnels through this guard so the closure
-    /// check is defined exactly once instead of being scattered across handlers.
+    /// Confirmed business rule: the closing boundary is the final-month grace period
+    /// <see cref="FiscalYear.FinalMonthGraceDeadline"/> — actual entry stays open for
+    /// seven calendar days after the fiscal year's end date (inclusive) — so a fiscal
+    /// year whose grace has expired in ECX business time (East Africa Time) is treated
+    /// as closed even before the nightly closure job flips its status. Every
+    /// scorecard-owned write path funnels through this guard so the closure check is
+    /// defined exactly once instead of being scattered across handlers, which also
+    /// means the deadline is enforced on the relevant API operations and never
+    /// depends on the scheduled job alone.
     /// </summary>
     public class ScorecardClosureGuard
     {
@@ -32,11 +36,14 @@ namespace Application.Services
         }
 
         /// <summary>
-        /// True once the fiscal year's calendar end date is in the past in ECX business time.
+        /// True once the fiscal year's final-month grace period has expired in ECX business
+        /// time — normal entry is blocked from the day after
+        /// <see cref="FiscalYear.FinalMonthGraceDeadline"/>. Dynamic: derived from the
+        /// year's configured end date, with no month-of-year assumption.
         /// </summary>
         public static bool YearHasEnded(FiscalYear year, DateTime businessDate)
         {
-            return year.EndDate.Date < businessDate.Date;
+            return year.IsPastFinalMonthGrace(businessDate);
         }
 
         public static bool IsClosed(Scorecard scorecard, DateTime businessDate)
@@ -85,8 +92,8 @@ namespace Application.Services
 
         /// <summary>
         /// Throws <see cref="ScorecardClosedException"/> when the fiscal year is no longer
-        /// Open or its end date has passed (e.g. creating or cloning a scorecard into a
-        /// closed year).
+        /// Open or its final-month grace period has expired (e.g. creating or cloning a
+        /// scorecard into a closed year).
         /// </summary>
         public async Task EnsureFiscalYearOpenAsync(Guid fiscalYearId, CancellationToken cancellationToken = default)
         {

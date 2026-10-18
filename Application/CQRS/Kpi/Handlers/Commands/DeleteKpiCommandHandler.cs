@@ -23,11 +23,29 @@ public class DeleteKpiCommandHandler : IRequestHandler<DeleteKpiCommandRequest>
         var kpi = await kpiRepository.GetById(request.Id)
             ?? throw new NotFoundException(nameof(KpiEntity), request.Id);
 
-        var hasChildKpis = kpiRepository.GetQueryable().Any(k => k.ParentKpiId == kpi.Id);
-        if (hasChildKpis)
-            throw new BadRequestException("Cannot delete a KPI that has child KPIs.");
+        await unitOfWork.ExecuteInTransactionAsync(async () =>
+        {
+            // The guard covers the whole descendant tree, including soft-deleted
+            // children the filtered read path no longer shows (FR-902 parent-child
+            // lineage): deleting a parent must never orphan history whose actual
+            // values would silently vanish from roll-ups.
+            var subtree = await kpiRepository.GetSubtreeIncludingInactiveAsync(kpi.Id);
+            if (await kpiRepository.HasAnyActualDataAsync(subtree.Select(k => k.Id).ToList()))
+                throw new BadRequestException("Cannot delete a KPI (or any of its child KPIs) that has recorded actual performance data. Historical actual values must be preserved.");
 
-        await kpiRepository.Delete(kpi);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+            // Closed subtree soft-delete happens atomically: either every member of
+            // the hierarchy is deactivated (shared IsDeleted + EntityStatus lifecycle
+            // convention, see GenericRepository.Delete) or none is, so a concurrent
+            // actual entry cannot attach data to a half-deleted hierarchy.
+            foreach (var member in subtree)
+            {
+                if (!member.IsDeleted)
+                {
+                    await kpiRepository.Delete(member);
+                }
+            }
+
+            return true;
+        });
     }
 }

@@ -87,8 +87,8 @@ public sealed partial class RoleDashboardService
 
         var targetCount = rows.Count;
         var withActualCount = rows.Count(r => r.Actual.HasValue);
-        var onTrack = load.Kpis.Count(k => DashboardRag.FromScore(KpiPeriod(load, k.Id)?.PeriodScore) == DashboardRag.Green);
-        var offTrack = load.Kpis.Count(k => DashboardRag.IsRed(KpiPeriod(load, k.Id)?.PeriodScore));
+        var onTrack = load.Kpis.Count(k => load.Rag(KpiPeriod(load, k.Id)?.PeriodScore) == DashboardRag.Green);
+        var offTrack = load.Kpis.Count(k => load.RagIsRed(KpiPeriod(load, k.Id)?.PeriodScore));
 
         return new BarChartWidgetDto
         {
@@ -152,7 +152,7 @@ public sealed partial class RoleDashboardService
             ValueSuffix = "%",
             AxisMin = 0m,
             AxisMax = 100m,
-            CategoryColors = shown.Select(x => DashboardRag.FromScore(x.Score)).ToList(),
+            CategoryColors = shown.Select(x => load.Rag(x.Score)).ToList(),
             Routes = scorecardId is null
                 ? new string?[] { }
                 : shown.Select(x => $"/scorecards/{scorecardId}?goalId={x.Goal.Id}").ToArray(),
@@ -194,7 +194,7 @@ public sealed partial class RoleDashboardService
             ValueSuffix = "%",
             AxisMin = 0m,
             AxisMax = 100m,
-            CategoryColors = shown.Select(d => DashboardRag.FromScore(d.Score)).ToList(),
+            CategoryColors = shown.Select(d => load.Rag(d.Score)).ToList(),
             Routes = shown.Select(d => d.Route).ToList(),
             Cards = new[]
             {
@@ -246,7 +246,7 @@ public sealed partial class RoleDashboardService
             ValueSuffix = "%",
             AxisMin = 0m,
             AxisMax = 100m,
-            CategoryColors = shown.Select(i => DashboardRag.FromScore(InitiativeProgress(i))).ToList(),
+            CategoryColors = shown.Select(i => load.Rag(InitiativeProgress(i))).ToList(),
             Routes = shown.Select(i => $"/initiatives/{i.Id}").ToList(),
             EmptyMessage = load.Profile.DataScope == DashboardDataScope.AssignedOnly
                 ? "You do not own any active initiatives."

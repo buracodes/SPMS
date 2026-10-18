@@ -21,6 +21,8 @@ public class FiscalYearController : ControllerBase
 {
     private readonly IMediator mediator;
     private readonly IFiscalYearRepository repository;
+    private readonly IFiscalPeriodRepository fiscalPeriodRepository;
+    private readonly IScorecardRepository scorecardRepository;
     private readonly IFiscalCalendarService fiscalCalendarService;
     private readonly FiscalYearLifecycleGuard lifecycleGuard;
     private readonly IBusinessClock businessClock;
@@ -29,6 +31,8 @@ public class FiscalYearController : ControllerBase
     public FiscalYearController(
         IMediator _mediator,
         IFiscalYearRepository _repository,
+        IFiscalPeriodRepository _fiscalPeriodRepository,
+        IScorecardRepository _scorecardRepository,
         IFiscalCalendarService _fiscalCalendarService,
         FiscalYearLifecycleGuard _lifecycleGuard,
         IBusinessClock _businessClock,
@@ -36,6 +40,8 @@ public class FiscalYearController : ControllerBase
     {
         mediator = _mediator;
         repository = _repository;
+        fiscalPeriodRepository = _fiscalPeriodRepository;
+        scorecardRepository = _scorecardRepository;
         fiscalCalendarService = _fiscalCalendarService;
         lifecycleGuard = _lifecycleGuard;
         businessClock = _businessClock;
@@ -72,7 +78,8 @@ public class FiscalYearController : ControllerBase
                 Label = entity.Label,
                 StartDate = entity.StartDate,
                 EndDate = entity.EndDate,
-                Status = entity.FiscalYearStatus.ToString()
+                Status = entity.FiscalYearStatus.ToString(),
+                HasScorecards = await scorecardRepository.AnyForFiscalYearAsync(entity.Id)
             }
         });
     }
@@ -125,18 +132,40 @@ public class FiscalYearController : ControllerBase
 
         await lifecycleGuard.EnsureCanUpdateAsync(entity, dto, businessClock.BusinessDate);
 
-        entity.Label = dto.Label?.Trim() ?? entity.Label;
-        if (dto.StartDate.HasValue || dto.EndDate.HasValue)
+        var datesChanged = dto.StartDate.HasValue && dto.StartDate.Value.Date != entity.StartDate.Date;
+
+        // null means "leave the label unchanged". The guard has already rejected a
+        // non-null blank label, but the fallback is kept explicit so a blank value can
+        // never erase the existing label here.
+        var newLabel = dto.Label?.Trim();
+        if (!string.IsNullOrEmpty(newLabel))
         {
-            // Once the year has a period calendar the guard refuses any date change; this branch
-            // therefore only runs before periods exist. The end date is always derived from the
-            // start so it can never drift from the twelve-month rule.
-            var newStartDate = (dto.StartDate ?? entity.StartDate).Date;
+            entity.Label = newLabel;
+        }
+        if (datesChanged)
+        {
+            // The guard only lets the dates move while nothing depends on the calendar. The end
+            // date is always derived from the new start so it can never drift from the
+            // twelve-month rule.
+            var newStartDate = dto.StartDate!.Value.Date;
             entity.StartDate = newStartDate;
             entity.EndDate = fiscalCalendarService.ComputeEndDate(newStartDate);
         }
 
-        await repository.Update(entity);
+        // Stage the year change, and when the dates moved replace the twelve monthly periods.
+        // The old periods are guaranteed free of dependents (scorecards, targets, actuals) by the
+        // guard, so they are safely superseded. The entity update and the period swap commit in a
+        // single transaction through the unit of work.
+        await repository.UpdateWithoutSave(entity);
+        if (datesChanged)
+        {
+            var oldPeriods = await fiscalPeriodRepository.GetByFiscalYearAsync(entity.Id);
+            await unitOfWork.RemoveRangeAsync(oldPeriods);
+            var newPeriods = fiscalCalendarService.GeneratePeriods(entity);
+            await unitOfWork.AddRangeAsync(newPeriods);
+        }
+
+        await unitOfWork.SaveChangesAsync();
 
         return Ok(new Response<FiscalYearDto>
         {
@@ -148,7 +177,8 @@ public class FiscalYearController : ControllerBase
                 Label = entity.Label,
                 StartDate = entity.StartDate,
                 EndDate = entity.EndDate,
-                Status = entity.FiscalYearStatus.ToString()
+                Status = entity.FiscalYearStatus.ToString(),
+                HasScorecards = await scorecardRepository.AnyForFiscalYearAsync(entity.Id)
             }
         });
     }

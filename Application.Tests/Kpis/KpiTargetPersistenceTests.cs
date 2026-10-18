@@ -2,6 +2,8 @@ using Application.Services;
 using Application.Tests.TestSupport;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
+using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Tests.Kpis;
@@ -98,5 +100,61 @@ public class KpiTargetPersistenceTests
         );
 
         await Assert.ThrowsAsync<DbUpdateException>(() => lease.Context.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task ReplaceForFiscalYear_StagesChanges_UntilUnitOfWorkCommits()
+    {
+        // Issue 1: ReplaceForFiscalYearAsync must not commit on its own, so the target rewrite
+        // and any other pending change (e.g. regenerated periods) commit atomically through the
+        // unit of work.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var service = new FiscalCalendarService();
+        var fiscalYear = service.CreateFiscalYear(2025);
+        var periods = service.GeneratePeriods(fiscalYear);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Test Scorecard", Scope = ScorecardScope.Corporate };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
+        var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Test KRA", Weight = 100 };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            KraId = kra.Id,
+            Name = "Revenue Growth",
+            Unit = "%",
+            Weight = 100,
+            DataSource = KpiDataSource.Manual,
+            KpiType = KpiType.Lagging
+        };
+
+        lease.Context.FiscalYears.Add(fiscalYear);
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Kras.Add(kra);
+        lease.Context.Kpis.Add(kpi);
+        lease.Context.FiscalPeriods.AddRange(periods);
+        await lease.Context.SaveChangesAsync();
+
+        var incoming = periods
+            .Select(p => new KpiTarget
+            {
+                Id = Guid.NewGuid(),
+                KpiId = kpi.Id,
+                FiscalPeriodId = p.Id,
+                TargetValue = p.FiscalMonth,
+                Granularity = TargetGranularity.Monthly
+            })
+            .ToList();
+
+        var repository = new KpiTargetRepository(lease.Context);
+        await repository.ReplaceForFiscalYearAsync(kpi.Id, fiscalYear.Id, incoming);
+
+        // Nothing is persisted until the unit of work commits.
+        Assert.Equal(0, await lease.Context.KpiTargets.CountAsync());
+
+        await new SpmsUnitOfWork(lease.Context).SaveChangesAsync();
+
+        Assert.Equal(12, await lease.Context.KpiTargets.CountAsync(t => t.KpiId == kpi.Id));
     }
 }

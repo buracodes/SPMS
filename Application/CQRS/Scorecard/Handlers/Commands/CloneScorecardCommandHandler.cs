@@ -10,8 +10,6 @@ using MediatR;
 using ScorecardEntity = Domain.Entities.Scorecard;
 using KraEntity = Domain.Entities.Kra;
 using KpiEntity = Domain.Entities.Kpi;
-using System.Text;
-using System.Text.RegularExpressions;
 
 namespace Application.CQRS.Scorecard.Handlers.Commands
 {
@@ -89,47 +87,34 @@ namespace Application.CQRS.Scorecard.Handlers.Commands
             var newKras = new List<KraEntity>();
             var newKpis = new List<KpiEntity>();
             var newTargets = new List<KpiTarget>();
-            var newGoalNames = new HashSet<string>();
-            var newKraNames = new HashSet<string>();
 
             var kpiIdMap = new Dictionary<Guid, Guid>();
             var sourceKpiByNewId = new Dictionary<Guid, KpiEntity>();
 
+            // Names are copied verbatim (trimmed only): the source scorecard already satisfies
+            // the per-parent unique name indexes, so the clone is collision-free by construction
+            // and no de-duplication (which silently dropped nodes) or re-mangling is needed.
             foreach (var goal in sourceGoals)
             {
-                var normalizedGoalName = NormalizeName(goal.Name);
-                if (!newGoalNames.Add(normalizedGoalName))
-                {
-                    continue;
-                }
-
                 var newGoal = new Goal
                 {
                     Id = Guid.NewGuid(),
                     ScorecardId = newScorecard.Id,
-                    Name = normalizedGoalName,
+                    Name = goal.Name.Trim(),
                     Description = goal.Description,
                     Weight = goal.Weight,
                     IsActive = goal.IsActive
                 };
                 newGoals.Add(newGoal);
-                var goalIdMap = new Dictionary<Guid, Guid> { [goal.Id] = newGoal.Id };
-                newKraNames.Clear();
 
                 foreach (var kra in goal.Kras)
                 {
-                    var normalizedKraName = NormalizeName(kra.Name);
-                    if (!newKraNames.Add(normalizedKraName))
-                    {
-                        continue;
-                    }
-
                     var newKra = new KraEntity
                     {
                         Id = Guid.NewGuid(),
                         GoalId = newGoal.Id,
                         ScorecardId = newScorecard.Id,
-                        Name = normalizedKraName,
+                        Name = kra.Name.Trim(),
                         Description = kra.Description,
                         Icon = kra.Icon,
                         StrategicThemeId = kra.StrategicThemeId,
@@ -138,18 +123,9 @@ namespace Application.CQRS.Scorecard.Handlers.Commands
                         IsActive = kra.IsActive
                     };
                     newKras.Add(newKra);
-                    var kraIdMap = new Dictionary<Guid, Guid> { [kra.Id] = newKra.Id };
-
-                    var newKpiNames = new HashSet<string>();
 
                     foreach (var kpi in kra.Kpis)
                     {
-                        var normalizedKpiName = NormalizeName(kpi.Name);
-                        if (!newKpiNames.Add(normalizedKpiName))
-                        {
-                            continue;
-                        }
-
                         var newKpi = new KpiEntity
                         {
                             Id = Guid.NewGuid(),
@@ -157,7 +133,7 @@ namespace Application.CQRS.Scorecard.Handlers.Commands
                             KraId = newKra.Id,
                             OwnerId = kpi.OwnerId,
                             UnitOfMeasureId = kpi.UnitOfMeasureId,
-                            Name = normalizedKpiName,
+                            Name = kpi.Name.Trim(),
                             Description = kpi.Description,
                             Unit = kpi.Unit,
                             Weight = kpi.Weight,
@@ -272,17 +248,6 @@ namespace Application.CQRS.Scorecard.Handlers.Commands
             }
 
             return goals;
-        }
-
-        private static string NormalizeName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return string.Empty;
-            }
-
-            var normalized = name.Normalize(NormalizationForm.FormC);
-            return Regex.Replace(normalized, @"[^\w\s]", "").Trim();
         }
     }
 }

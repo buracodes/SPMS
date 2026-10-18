@@ -13,5 +13,10 @@ public class UpdateKpiValidator : AbstractValidator<UpdateKpiCommandRequest>
         RuleFor(x => x.Name)
             .MaximumLength(200).WithMessage("KPI name must be 200 characters or fewer.")
             .When(x => !string.IsNullOrWhiteSpace(x.Name));
+
+        RuleFor(x => x.Weight)
+            .GreaterThan(0m).WithMessage("KPI weight must be greater than 0%.")
+            .LessThanOrEqualTo(100m).WithMessage("KPI weight cannot exceed 100%.")
+            .When(x => x.Weight.HasValue);
     }
 }

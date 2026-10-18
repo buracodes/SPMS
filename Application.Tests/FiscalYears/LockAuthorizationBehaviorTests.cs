@@ -164,14 +164,74 @@ public class LockAuthorizationBehaviorTests
     }
 
     [Fact]
-    public async Task Blocks_WhenFiscalYearEnded_EvenForKpiOwner()
+    public async Task Allows_FinalMonthEntry_DuringGracePeriod_ForKpiOwner()
     {
-        // FR-703 (item: closure timing): the year has ended in ECX business time but its
-        // status is still Open (the closure job has not run yet). The scorecard is active
-        // and the caller is the KPI owner, yet the write must be blocked.
+        // Confirmed business rule (final-month grace): the fiscal year 2025/26 ends
+        // 2026-06-30, so final-month (June) actual entry stays open for the KPI owner
+        // through the grace deadline 2026-07-07, inclusive — even though the calendar
+        // year has already rolled over. No override permission or reason needed.
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateBaseFixtureAsync(lease);
-        var clock = TestBusinessClock.On(new DateTime(2026, 7, 1, 8, 0, 0, DateTimeKind.Utc));
+        var clock = TestBusinessClock.On(new DateTime(2026, 7, 7, 8, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            UserId = fixture.OwnerId
+        }, clock);
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.FinalPeriodId,
+                Value = 100
+            }
+        };
+
+        var invoked = false;
+        await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<ActualValueDto>()); }, CancellationToken.None);
+
+        Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Blocks_FinalMonthEntry_OnceGracePeriodExpires_KpiOwnerWithoutOverride()
+    {
+        // Normal entry is blocked from 2026-07-08 (the first day after the grace
+        // deadline): the year is read-only for the KPI owner and requires an audited
+        // Admin/Power User override to change.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateBaseFixtureAsync(lease);
+        var clock = TestBusinessClock.On(new DateTime(2026, 7, 8, 8, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            UserId = fixture.OwnerId
+        }, clock);
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.FinalPeriodId,
+                Value = 100
+            }
+        };
+
+        await Assert.ThrowsAsync<ScorecardClosedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Blocks_WhenFiscalYearGraceExpired_EvenForKpiOwner()
+    {
+        // FR-703 (item: closure timing): the fiscal year's final-month grace has expired
+        // in ECX business time but its status is still Open (the nightly closure job has
+        // not run yet). The scorecard itself is Active, the caller is the KPI owner, and
+        // the write must still be blocked — the deadline never depends on the job.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateBaseFixtureAsync(lease);
+        var clock = TestBusinessClock.On(new DateTime(2026, 7, 8, 8, 0, 0, DateTimeKind.Utc));
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
             UserId = fixture.OwnerId
@@ -187,14 +247,15 @@ public class LockAuthorizationBehaviorTests
     }
 
     [Fact]
-    public async Task AllowsWhenFiscalYearEnded_WithOverridePermissionAndReason()
+    public async Task AllowsWhenGraceExpired_WithOverridePermissionAndReason()
     {
-        // Audited actual-value correction on an ended-but-not-yet-closed year is the only
-        // exception to the read-only rule, and it requires the override permission and an
-        // explicit reason (which the handler persists into the audit trail).
+        // Audited actual-value correction on a grace-expired-but-not-yet-closed year is
+        // the only exception to the read-only rule, and it requires the override
+        // permission and an explicit reason (which the handler persists into the audit
+        // trail).
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateBaseFixtureAsync(lease);
-        var clock = TestBusinessClock.On(new DateTime(2026, 7, 1, 8, 0, 0, DateTimeKind.Utc));
+        var clock = TestBusinessClock.On(new DateTime(2026, 7, 8, 8, 0, 0, DateTimeKind.Utc));
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
             Permissions = new[] { Permissions.ActualsOverride }
@@ -235,6 +296,8 @@ public class LockAuthorizationBehaviorTests
             new FiscalPeriodRepository(lease.Context),
             new PeriodLockConfigRepository(lease.Context),
             new SystemConfigRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            TestBusinessClock.Real(),
             NullLogger<PeriodLockStatusService>.Instance);
 
         // Default clock pins the business date to the fixture's last fiscal-year day
@@ -282,12 +345,13 @@ public class LockAuthorizationBehaviorTests
         return (fixture.KpiId, fixture.OwnerId, fixture.ScorecardId, fixture.PeriodId);
     }
 
-    private static async Task<(Guid KpiId, Guid OwnerId, Guid ScorecardId, Guid PeriodId)> CreateBaseFixtureAsync(TestDbContextLease lease)
+    private static async Task<(Guid KpiId, Guid OwnerId, Guid ScorecardId, Guid PeriodId, Guid FinalPeriodId)> CreateBaseFixtureAsync(TestDbContextLease lease)
     {
         var calendar = new FiscalCalendarService();
         var fiscalYear = calendar.CreateFiscalYear(2025);
         var periods = calendar.GeneratePeriods(fiscalYear);
         var july = periods.First(p => p.FiscalMonth == 1);
+        var june = periods.First(p => p.FiscalMonth == 12);
         var ownerId = Guid.NewGuid();
 
         var scorecard = new Scorecard
@@ -328,6 +392,6 @@ public class LockAuthorizationBehaviorTests
         lease.Context.FiscalPeriods.AddRange(periods);
         await lease.Context.SaveChangesAsync();
 
-        return (kpi.Id, ownerId, scorecard.Id, july.Id);
+        return (kpi.Id, ownerId, scorecard.Id, july.Id, june.Id);
     }
 }

@@ -1,5 +1,6 @@
 using Application.Interface.IService;
 using Application.Jobs;
+using Domain.Entities;
 using Domain.Enums;
 using Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
@@ -10,12 +11,15 @@ namespace Infrastructure.Jobs
 {
     /// <summary>
     /// FR-703 automatic year-end closure. Runs on a configurable daily cron and closes every
-    /// fiscal year whose end date has passed (the first day of the following fiscal year),
-    /// marking the year and all of its scorecards read-only. The boundary is evaluated in
-    /// ECX business time (East Africa Time, UTC+3): the cron runs daily at 03:15 UTC
-    /// (= 06:15 EAT), which is before ECX work hours, and any year that ended mid-day is
-    /// already treated as read-only by <see cref="ScorecardClosureGuard"/> the moment the
-    /// business date moves past it — so the job only finalizes the status transition.
+    /// fiscal year whose final-month grace period has expired, marking the year and all of
+    /// its scorecards read-only. The grace is the seven calendar days after the year's end
+    /// date (inclusive) during which final-month actual entry is still allowed; normal entry
+    /// is blocked from the day after the grace deadline. The boundary is evaluated in ECX
+    /// business time (East Africa Time, UTC+3): the cron runs daily at 03:15 UTC
+    /// (= 06:15 EAT), which is before ECX work hours, and any year whose grace has expired
+    /// is already treated as read-only by <see cref="Application.Services.ScorecardClosureGuard"/>
+    /// the moment the business date moves past the deadline — so the job only finalizes the
+    /// status transition and never gates the cutoff by itself.
     /// Idempotent: already-closed years and scorecards are skipped, so a retried or
     /// re-run job changes nothing.
     /// </summary>
@@ -42,7 +46,8 @@ namespace Infrastructure.Jobs
             var businessDate = _businessClock.BusinessDate;
 
             var eligibleYears = await context.FiscalYears
-                .Where(fy => fy.FiscalYearStatus == FiscalYearStatus.Open && fy.EndDate.Date < businessDate)
+                .Where(fy => fy.FiscalYearStatus == FiscalYearStatus.Open
+                    && fy.EndDate.Date.AddDays(Domain.Entities.FiscalYear.FinalMonthGraceDays) < businessDate)
                 .OrderBy(fy => fy.StartDate)
                 .ToListAsync();
 

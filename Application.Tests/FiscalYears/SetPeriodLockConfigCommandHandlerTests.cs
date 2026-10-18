@@ -269,6 +269,8 @@ public class SetPeriodLockConfigCommandHandlerTests
             new FiscalPeriodRepository(lease.Context),
             new PeriodLockConfigRepository(lease.Context),
             new SystemConfigRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            TestBusinessClock.Real(),
             NullLogger<PeriodLockStatusService>.Instance);
     }
 

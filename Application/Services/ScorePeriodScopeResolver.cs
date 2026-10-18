@@ -39,11 +39,11 @@ internal static class ScorePeriodScopeResolver
         };
     }
 
-    public static int GetCurrentFiscalMonth(FiscalYear fy)
+    public static int GetCurrentFiscalMonth(FiscalYear fy, DateTime businessDate)
     {
-        var now = DateTime.UtcNow;
-        if (now < fy.StartDate) return 0;
-        if (now > fy.EndDate) return 12;
+        var now = businessDate.Date;
+        if (now < fy.StartDate.Date) return 0;
+        if (now > fy.EndDate.Date) return 12;
 
         var startMonth = fy.StartDate.Month;
         var currentMonth = now.Month;

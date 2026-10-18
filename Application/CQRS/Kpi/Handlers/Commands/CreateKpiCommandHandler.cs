@@ -37,6 +37,9 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
         if (scorecard == null)
             throw new NotFoundException(nameof(Domain.Entities.Scorecard), request.ScorecardId);
 
+        if (request.KraId.HasValue == request.DivisionGoalId.HasValue)
+            throw new BadRequestException("A KPI must belong to exactly one parent: a KRA or a division goal, not both or neither.");
+
         if (request.KraId.HasValue)
         {
             var kra = await kraRepository.GetById(request.KraId.Value);
@@ -59,75 +62,85 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
                 throw new NotFoundException(nameof(Domain.Entities.Division), request.DivisionOwnerId.Value);
         }
 
-        if (request.KraId.HasValue)
+        var kpiName = request.Name.Trim();
+
+        // The weight budget is checked with the insert inside one serializable
+        // transaction (ADR-009): the SQL SUM and the insert can no longer race, so
+        // two concurrent creates under the same parent cannot jointly break the
+        // 100% cap. Exactly 100% is allowed; soft-deleted siblings are excluded by
+        // the global query filter inside the SQL SUM.
+        return await unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            var kraWithKpis = await kraRepository.GetByIdWithKpisAsync(request.KraId.Value);
-            var existingWeight = kraWithKpis?.Kpis.Sum(k => k.Weight) ?? 0m;
+            var existingWeight = request.KraId.HasValue
+                ? await kpiRepository.GetKraKpiWeightsSumAsync(request.KraId.Value)
+                : await kpiRepository.GetDivisionKpiWeightsSumAsync(request.DivisionGoalId!.Value);
             if (existingWeight + request.Weight > 100m)
-                throw new BadRequestException($"Total KPI weight under this KRA cannot exceed 100%. Current total is {existingWeight}%.");
+                throw new BadRequestException($"Total KPI weight under this parent cannot exceed 100%. Current total is {existingWeight}%.");
 
-            var kpiName = request.Name.Trim();
-            if (kraWithKpis?.Kpis.Any(k => !k.IsDeleted && string.Equals(k.Name, kpiName, StringComparison.OrdinalIgnoreCase)) == true)
-                throw new BadRequestException($"A KPI named '{kpiName}' already exists under this KRA.");
-        }
+            var duplicateExists = request.KraId.HasValue
+                ? await kpiRepository.ExistsUnderKraAsync(request.KraId.Value, kpiName)
+                : await kpiRepository.ExistsUnderDivisionGoalAsync(request.DivisionGoalId!.Value, kpiName);
+            if (duplicateExists)
+                throw new BadRequestException($"A KPI named '{kpiName}' already exists under this parent.");
 
-        var kpi = new KpiEntity
-        {
-            Id = Guid.NewGuid(),
-            ScorecardId = request.ScorecardId,
-            KraId = request.KraId,
-            DivisionGoalId = request.DivisionGoalId,
-            OwnerId = request.OwnerId,
-            DivisionOwnerId = request.DivisionOwnerId,
-            Name = request.Name.Trim(),
-            Description = request.Description,
-            Unit = request.Unit,
-            Weight = request.Weight,
-            OptimizationType = request.OptimizationType,
-            DataSource = request.DataSource,
-            KpiType = request.KpiType,
-            IsCumulative = request.IsCumulative,
-            ParentKpiId = request.ParentKpiId,
-            Baseline = request.Baseline,
-            MinValue = request.MinValue,
-            MaxValue = request.MaxValue,
-            Formula = request.Formula,
-            IsActive = true
-        };
-
-        await kpiRepository.Add(kpi);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-
-        return new Response<KpiDto>
-        {
-            Success = true,
-            Message = "KPI created successfully.",
-            Data = new KpiDto
+            var kpi = new KpiEntity
             {
-                Id = kpi.Id,
-                ScorecardId = kpi.ScorecardId,
-                KraId = kpi.KraId,
-                DivisionGoalId = kpi.DivisionGoalId,
-                OwnerId = kpi.OwnerId,
-                DivisionOwnerId = kpi.DivisionOwnerId,
-                DivisionOwnerName = divisionOwner?.Name,
-                Name = kpi.Name,
-                Description = kpi.Description,
-                Unit = kpi.Unit,
-                Weight = kpi.Weight,
-                ToleranceBandPercent = kpi.ToleranceBandPercent,
-                OptimizationType = kpi.OptimizationType,
-                DataSource = kpi.DataSource,
-                KpiType = kpi.KpiType,
-                IsCumulative = kpi.IsCumulative,
-                ParentKpiId = kpi.ParentKpiId,
-                Baseline = kpi.Baseline,
-                MinValue = kpi.MinValue,
-                MaxValue = kpi.MaxValue,
-                Formula = kpi.Formula,
-                IsActive = kpi.IsActive,
-                ChildKpiCount = 0
-            }
-        };
+                Id = Guid.NewGuid(),
+                ScorecardId = request.ScorecardId,
+                KraId = request.KraId,
+                DivisionGoalId = request.DivisionGoalId,
+                OwnerId = request.OwnerId,
+                DivisionOwnerId = request.DivisionOwnerId,
+                Name = kpiName,
+                Description = request.Description,
+                Unit = request.Unit,
+                Weight = request.Weight,
+                OptimizationType = request.OptimizationType,
+                DataSource = request.DataSource,
+                KpiType = request.KpiType,
+                IsCumulative = request.IsCumulative,
+                ParentKpiId = request.ParentKpiId,
+                Baseline = request.Baseline,
+                MinValue = request.MinValue,
+                MaxValue = request.MaxValue,
+                Formula = request.Formula,
+                IsActive = true
+            };
+
+            await kpiRepository.Add(kpi);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return new Response<KpiDto>
+            {
+                Success = true,
+                Message = "KPI created successfully.",
+                Data = new KpiDto
+                {
+                    Id = kpi.Id,
+                    ScorecardId = kpi.ScorecardId,
+                    KraId = kpi.KraId,
+                    DivisionGoalId = kpi.DivisionGoalId,
+                    OwnerId = kpi.OwnerId,
+                    DivisionOwnerId = kpi.DivisionOwnerId,
+                    DivisionOwnerName = divisionOwner?.Name,
+                    Name = kpi.Name,
+                    Description = kpi.Description,
+                    Unit = kpi.Unit,
+                    Weight = kpi.Weight,
+                    ToleranceBandPercent = kpi.ToleranceBandPercent,
+                    OptimizationType = kpi.OptimizationType,
+                    DataSource = kpi.DataSource,
+                    KpiType = kpi.KpiType,
+                    IsCumulative = kpi.IsCumulative,
+                    ParentKpiId = kpi.ParentKpiId,
+                    Baseline = kpi.Baseline,
+                    MinValue = kpi.MinValue,
+                    MaxValue = kpi.MaxValue,
+                    Formula = kpi.Formula,
+                    IsActive = kpi.IsActive,
+                    ChildKpiCount = 0
+                }
+            };
+        });
     }
 }

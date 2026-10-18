@@ -57,9 +57,11 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
         var canOverride = currentUserService.Permissions.Contains(Permissions.ActualsOverride);
 
         // Closed fiscal year / scorecard (FR-703): read-only unless an audited
-        // Admin/Power User override with a reason is supplied. A fiscal year whose
-        // end date has passed in ECX business time is closed even before the nightly
-        // closure job flips its status.
+        // Admin/Power User override with a reason is supplied. The closing boundary is
+        // the final-month grace period: actual entry for the fiscal year's last month
+        // stays open through the end date plus seven calendar days (inclusive), so a
+        // fiscal year whose grace has expired in ECX business time is closed even before
+        // the nightly closure job flips its status.
         if (ScorecardClosureGuard.IsClosed(kpi.Scorecard, businessClock.BusinessDate))
         {
             if (!canOverride)
@@ -80,7 +82,7 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
         var status = await lockStatusService.GetStatusAsync(
             kpi.ScorecardId,
             fiscalPeriodId,
-            DateTime.UtcNow);
+            businessClock.BusinessDate);
 
         // If period is open, only KPI owner (or override users) can enter
         if (status.State == PeriodLockState.Open)

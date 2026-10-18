@@ -38,6 +38,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
     private readonly IUserRepository userRepository;
     private readonly IGenericRepository<Role> roleRepository;
     private readonly IInitiativeProgressCalculator initiativeProgressCalculator;
+    private readonly IBusinessClock businessClock;
+    private readonly IRagThresholdService ragThresholdService;
 
     public RoleDashboardService(
         ICurrentUserService currentUserService,
@@ -58,7 +60,9 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         IAuditLogEntryRepository auditLogRepository,
         IUserRepository userRepository,
         IGenericRepository<Role> roleRepository,
-        IInitiativeProgressCalculator initiativeProgressCalculator)
+        IInitiativeProgressCalculator initiativeProgressCalculator,
+        IBusinessClock businessClock,
+        IRagThresholdService ragThresholdService)
     {
         this.currentUserService = currentUserService;
         this.scorePeriodCalculationService = scorePeriodCalculationService;
@@ -79,6 +83,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.initiativeProgressCalculator = initiativeProgressCalculator;
+        this.businessClock = businessClock;
+        this.ragThresholdService = ragThresholdService;
     }
 
     private const int MaxScorecardsForComparison = 12;
@@ -259,8 +265,17 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         public int? RequestedQuarter { get; set; }
         public int? RequestedFromMonth { get; set; }
         public int? RequestedToMonth { get; set; }
-        public DateTime NowUtc { get; set; } = DateTime.UtcNow;
+        /// <summary>ECX business date (EAT) that "today" is evaluated against.</summary>
+        public DateTime BusinessDate { get; set; } = DateTime.UtcNow.Date;
         public int CurrentFiscalMonth { get; set; }
+
+        /// <summary>Effective RAG thresholds (FR-607) for this request; every widget bands with these.</summary>
+        public RagThresholds Thresholds { get; set; } = RagThresholds.Default;
+
+        /// <summary>Single authoritative RAG band for a score in this dashboard payload.</summary>
+        public string Rag(decimal? score) => DashboardRag.FromScore(score, Thresholds);
+
+        public bool RagIsRed(decimal? score) => DashboardRag.IsRed(score, Thresholds);
 
         public bool Has(string widgetKey) => Widgets.Any(w => w.Key == widgetKey);
 
@@ -277,7 +292,11 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         {
             Profile = profile,
             Widgets = DashboardRoleCatalog.ResolveWidgets(profile, permissions),
-            Permissions = permissions
+            Permissions = permissions,
+            BusinessDate = businessClock.BusinessDate,
+            // FR-607: load the effective thresholds once per dashboard request so every widget,
+            // chart and alert bands the same score identically.
+            Thresholds = await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken)
         };
 
         // ---- fiscal year (default: current open year, else the most recent)
@@ -297,7 +316,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         }
 
         load.Periods = await fiscalPeriodRepository.GetByFiscalYearAsync(fiscalYear.Id);
-        load.CurrentFiscalMonth = CurrentFiscalMonth(fiscalYear, load.Periods, load.NowUtc);
+        load.CurrentFiscalMonth = CurrentFiscalMonth(fiscalYear, load.Periods, load.BusinessDate);
 
         // ---- requested period, needed for the filter options even when there is no scorecard
         load.RequestedPeriodType = ParsePeriodType(filter?.PeriodType).ToString();
@@ -476,7 +495,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
                 load.SelectedScorecard.Id,
                 load.Periods,
                 configs,
-                load.NowUtc);
+                load.BusinessDate);
 
             load.LocksByMonth = load.Periods
                 .Select((period, index) => new { period.FiscalMonth, Info = statuses.ElementAtOrDefault(index) })
@@ -500,15 +519,15 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
     private static int? Clamp(int? value, int min, int max)
         => value is null ? null : Math.Clamp(value.Value, min, max);
 
-    private static int CurrentFiscalMonth(FiscalYear fiscalYear, IReadOnlyList<FiscalPeriod> periods, DateTime nowUtc)
+    private static int CurrentFiscalMonth(FiscalYear fiscalYear, IReadOnlyList<FiscalPeriod> periods, DateTime businessDate)
     {
         if (periods.Count == 0)
         {
             return 0;
         }
 
-        var period = periods.FirstOrDefault(p => nowUtc >= p.StartDate && nowUtc <= p.EndDate)
-            ?? periods.Where(p => p.StartDate > nowUtc).OrderBy(p => p.FiscalMonth).Select(p => (FiscalPeriod?)p).FirstOrDefault();
+        var period = periods.FirstOrDefault(p => businessDate >= p.StartDate && businessDate <= p.EndDate)
+            ?? periods.Where(p => p.StartDate > businessDate).OrderBy(p => p.FiscalMonth).Select(p => (FiscalPeriod?)p).FirstOrDefault();
 
         return period?.FiscalMonth ?? 0;
     }

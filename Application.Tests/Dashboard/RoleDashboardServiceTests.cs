@@ -7,6 +7,7 @@ using Domain.Calculation.ScoreStrategies;
 using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -50,6 +51,7 @@ public class RoleDashboardServiceTests
     {
         var context = lease.Context;
         var factory = new ScoreStrategyFactory();
+        var clock = TestBusinessClock.Real();
         var scorePeriod = new ScorePeriodCalculationService(
             new ScorecardRepository(context),
             new FiscalYearRepository(context),
@@ -61,7 +63,8 @@ public class RoleDashboardServiceTests
             new KpiScoreCalculator(factory),
             new KraScoreCalculator(),
             new GoalScoreCalculator(),
-            new ScorecardScoreCalculator());
+            new ScorecardScoreCalculator(),
+            clock);
 
         var divisionPeriod = new DivisionPeriodCalculationService(
             new DivisionGoalRepository(context),
@@ -71,7 +74,8 @@ public class RoleDashboardServiceTests
             new KpiActualValueRepository(context),
             new KpiScoreCalculator(factory),
             new GoalScoreCalculator(),
-            new ScorecardScoreCalculator());
+            new ScorecardScoreCalculator(),
+            clock);
 
         return new RoleDashboardService(
             user,
@@ -92,11 +96,17 @@ public class RoleDashboardServiceTests
                 new FiscalPeriodRepository(context),
                 new PeriodLockConfigRepository(context),
                 new SystemConfigRepository(context),
+                new FiscalYearRepository(context),
+                clock,
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<PeriodLockStatusService>.Instance),
             new AuditLogEntryRepository(context),
             new UserRepository(context),
             new GenericRepository<Role>(context),
-            new InitiativeProgressCalculator());
+            new InitiativeProgressCalculator(),
+            clock,
+            new RagThresholdService(
+                new RagThresholdConfigRepository(context),
+                new SpmsUnitOfWork(context)));
     }
 
     private static async Task<FiscalYear> SeedYearAsync(TestDbContextLease lease, int calendarYear = 2026)
@@ -152,6 +162,7 @@ public class RoleDashboardServiceTests
             Weight = 100,
             Unit = "ETB",
             IsActive = true,
+            IsCumulative = true,
             OwnerId = ownerId,
             OptimizationType = KpiOptimizationType.Maximize,
             KpiType = KpiType.Lagging
@@ -258,8 +269,11 @@ public class RoleDashboardServiceTests
         var chart = widgets.TargetVsActual!;
 
         // Groups keep KPI order (revenue first), and each unit only sums its own values.
+        // FR-605: "Revenue" is cumulative (ETB volume) so its year view sums the 12
+        // monthly targets (and actuals); "%" KPIs aggregate by average, so its annual
+        // target is the monthly value (10), and it has no actuals at all (null).
         Assert.Equal(new[] { "ETB", "%" }, chart.Categories);
-        Assert.Equal(new decimal?[] { 1200m, 120m }, chart.Series[0].Values.ToArray());
+        Assert.Equal(new decimal?[] { 1200m, 10m }, chart.Series[0].Values.ToArray());
         Assert.Equal(new decimal?[] { 960m, null }, chart.Series[1].Values.ToArray());
 
         // A unit without any entered actuals is grey, never a misleading zero bar.
@@ -656,5 +670,64 @@ public class RoleDashboardServiceTests
         // A finished fiscal year must not be cut down to the months "so far".
         Assert.Equal(12, context.Periods.Count(p => p.Value.StartsWith("Month:", StringComparison.Ordinal)));
         Assert.All(context.Periods, p => Assert.Null(p.Detail));
+    }
+
+    /// <summary>
+    /// FR-607: stored RagThresholdConfig rows must change how the dashboard bands the same score -
+    /// widgets read the effective thresholds the request loaded, not constants. An 80% overall
+    /// score is Amber under the FR-607 defaults (95/70) but flips to Red once an administrator
+    /// stores a stricter configuration, proving the wiring end to end.
+    /// </summary>
+    [Fact]
+    public async Task Widgets_band_scores_with_the_stored_thresholds_not_defaults()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (_, _, mine, _) = await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        await SeedMonthlyTargetsAsync(lease, year, mine.Id, monthlyTarget: 100m, withActuals: true);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            Roles = new[] { Roles.Executive },
+            Permissions = ExecutivePermissions
+        };
+
+        var widgets = await CreateService(lease, user).GetWidgetsAsync(new() { PeriodType = "Year" });
+        Assert.Equal(DashboardRag.Amber, widgets.OverallScore!.RagLabel);
+
+        // An administrator stores a stricter Green/Amber split; the next dashboard load bands
+        // the unchanged 80% score differently.
+        lease.Context.RagThresholdConfigs.AddRange(
+            new RagThresholdConfig
+            {
+                Id = Guid.NewGuid(),
+                ScopeKey = RagThresholdDefaults.ScopeKey,
+                Band = RagBand.Green,
+                MinScore = 85m,
+                Color = RagThresholdDefaults.GreenColor,
+                Status = EntityStatus.Active,
+                IsDeleted = false,
+                CreatedDate = DateTime.UtcNow
+            },
+            new RagThresholdConfig
+            {
+                Id = Guid.NewGuid(),
+                ScopeKey = RagThresholdDefaults.ScopeKey,
+                Band = RagBand.Yellow,
+                MinScore = 81m,
+                MaxScore = 85m,
+                Color = RagThresholdDefaults.YellowColor,
+                Status = EntityStatus.Active,
+                IsDeleted = false,
+                CreatedDate = DateTime.UtcNow
+            });
+        await lease.Context.SaveChangesAsync();
+
+        var restocked = await CreateService(lease, user).GetWidgetsAsync(new() { PeriodType = "Year" });
+        Assert.Equal(DashboardRag.Red, restocked.OverallScore!.RagLabel);
     }
 }

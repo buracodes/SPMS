@@ -1,35 +1,47 @@
+using Domain.Constants;
+
 namespace Application.Dashboard;
 
 /// <summary>
-/// RAG banding for dashboard payloads. The thresholds intentionally mirror
-/// <c>ReportingService.Rag</c> so the dashboard and the report engine always agree
-/// on whether a score is on track, at risk or off track.
+/// RAG banding for dashboard, report and planning payloads (FR-607, FR-908). Thresholds are
+/// administrator configurable through <c>RagThresholdConfig</c> / <c>IRagThresholdService</c>; the
+/// constants here are the FR-607 fallback defaults only. Pass the effective <see cref="RagThresholds"/>
+/// loaded once per operation so every view bands a score identically.
 /// </summary>
 public static class DashboardRag
 {
-    public const decimal GreenThreshold = 95m;
-    public const decimal AmberThreshold = 70m;
+    /// <summary>Fallback Green threshold. Effective value comes from <see cref="RagThresholds"/>.</summary>
+    public const decimal GreenThreshold = RagThresholdDefaults.GreenThreshold;
 
+    /// <summary>Fallback Yellow threshold. Effective value comes from <see cref="RagThresholds"/>.</summary>
+    public const decimal YellowThreshold = RagThresholdDefaults.YellowThreshold;
+
+    // Wire/UI tokens. These are the FE display dialect ("Green" | "Amber" | "Red" | "NoData") so
+    // payloads need no remapping in Angular; the Yellow band is communicated as "Amber" and a
+    // missing/unusable score as "NoData" - it is never reported as Red.
     public const string Green = "Green";
     public const string Amber = "Amber";
     public const string Red = "Red";
     public const string NoData = "NoData";
 
-    /// <summary>Human readable band for a score, or <see cref="NoData"/> when no score exists.</summary>
-    public static string FromScore(decimal? score)
-    {
-        if (!score.HasValue)
-        {
-            return NoData;
-        }
+    // FRD vocabulary aliases: the UI labels the bands Yellow and Gray ("No score"), but the wire
+    // values stay Amber/NoData so the API contract and existing clients keep working.
+    public const string Yellow = Amber;
+    public const string Gray = NoData;
 
-        if (score.Value >= GreenThreshold)
-        {
-            return Green;
-        }
+    public const decimal AmberThreshold = YellowThreshold;
 
-        return score.Value >= AmberThreshold ? Amber : Red;
-    }
+    /// <summary>Human readable band for a score using FR-607 defaults, or <see cref="NoData"/> when no score exists.</summary>
+    public static string FromScore(decimal? score) => RagThresholds.Default.Classify(score);
 
-    public static bool IsRed(decimal? score) => score.HasValue && score.Value < AmberThreshold;
+    /// <summary>Human readable band for a score using the configured thresholds, or <see cref="NoData"/> when no score exists.</summary>
+    public static string FromScore(decimal? score, RagThresholds? thresholds)
+        => (thresholds ?? RagThresholds.Default).Classify(score);
+
+    /// <summary>Red only when a score exists and falls below the Yellow threshold (FR-607 defaults).</summary>
+    public static bool IsRed(decimal? score) => RagThresholds.Default.IsRed(score);
+
+    /// <summary>Red only when a score exists and falls below the configured Yellow threshold.</summary>
+    public static bool IsRed(decimal? score, RagThresholds? thresholds)
+        => (thresholds ?? RagThresholds.Default).IsRed(score);
 }

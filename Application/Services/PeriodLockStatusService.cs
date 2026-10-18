@@ -13,21 +13,27 @@ public sealed class PeriodLockStatusService : IPeriodLockStatusService
     private readonly IFiscalPeriodRepository fiscalPeriodRepository;
     private readonly IPeriodLockConfigRepository periodLockConfigRepository;
     private readonly ISystemConfigRepository systemConfigRepository;
+    private readonly IFiscalYearRepository fiscalYearRepository;
+    private readonly IBusinessClock businessClock;
     private readonly ILogger<PeriodLockStatusService> _logger;
 
     public PeriodLockStatusService(
         IFiscalPeriodRepository fiscalPeriodRepository,
         IPeriodLockConfigRepository periodLockConfigRepository,
         ISystemConfigRepository systemConfigRepository,
+        IFiscalYearRepository fiscalYearRepository,
+        IBusinessClock businessClock,
         ILogger<PeriodLockStatusService> logger)
     {
         this.fiscalPeriodRepository = fiscalPeriodRepository;
         this.periodLockConfigRepository = periodLockConfigRepository;
         this.systemConfigRepository = systemConfigRepository;
+        this.fiscalYearRepository = fiscalYearRepository;
+        this.businessClock = businessClock;
         this._logger = logger;
     }
 
-    public async Task<PeriodLockInfo> GetStatusAsync(Guid scorecardId, Guid fiscalPeriodId, DateTime? nowUtc = null)
+    public async Task<PeriodLockInfo> GetStatusAsync(Guid scorecardId, Guid fiscalPeriodId, DateTime? asOfBusinessDate = null)
     {
         var period = await fiscalPeriodRepository.GetById(fiscalPeriodId);
         if (period == null)
@@ -35,30 +41,44 @@ public sealed class PeriodLockStatusService : IPeriodLockStatusService
             throw new Exceptions.NotFoundException(nameof(FiscalPeriod), fiscalPeriodId);
         }
 
-        return await GetStatusAsync(scorecardId, period, nowUtc);
+        return await GetStatusAsync(scorecardId, period, asOfBusinessDate);
     }
 
-    public async Task<PeriodLockInfo> GetStatusAsync(Guid scorecardId, FiscalPeriod period, DateTime? nowUtc = null)
+    public async Task<PeriodLockInfo> GetStatusAsync(Guid scorecardId, FiscalPeriod period, DateTime? asOfBusinessDate = null)
     {
         var explicitConfig = await periodLockConfigRepository
             .GetByScorecardAndPeriodAsync(scorecardId, period.Id);
         var defaults = await GetDefaultWindowAsync();
+        var fiscalYear = await fiscalYearRepository.GetById(period.FiscalYearId);
 
-        return Evaluate(period, explicitConfig, defaults, nowUtc ?? DateTime.UtcNow);
+        return Evaluate(period, explicitConfig, defaults, fiscalYear, asOfBusinessDate ?? businessClock.BusinessDate);
     }
 
     public async Task<IReadOnlyList<PeriodLockInfo>> GetStatusesAsync(
         Guid scorecardId,
         IReadOnlyList<FiscalPeriod> periods,
         IReadOnlyList<PeriodLockConfig> explicitConfigs,
-        DateTime? nowUtc = null)
+        DateTime? asOfBusinessDate = null)
     {
         var defaults = await GetDefaultWindowAsync();
         var configByPeriod = explicitConfigs.ToDictionary(c => c.FiscalPeriodId);
-        var now = nowUtc ?? DateTime.UtcNow;
+        var businessDate = asOfBusinessDate ?? businessClock.BusinessDate;
+
+        // A batch normally covers one fiscal year; resolve each distinct year once so the
+        // final-month grace rule can be applied to the last reporting month only.
+        var fiscalYears = new Dictionary<Guid, FiscalYear?>();
+        foreach (var fiscalYearId in periods.Select(p => p.FiscalYearId).Distinct())
+        {
+            fiscalYears[fiscalYearId] = await fiscalYearRepository.GetById(fiscalYearId);
+        }
 
         return periods
-            .Select(p => Evaluate(p, configByPeriod.GetValueOrDefault(p.Id), defaults, now))
+            .Select(p => Evaluate(
+                p,
+                configByPeriod.GetValueOrDefault(p.Id),
+                defaults,
+                fiscalYears.GetValueOrDefault(p.FiscalYearId),
+                businessDate))
             .ToList();
     }
 
@@ -66,11 +86,12 @@ public sealed class PeriodLockStatusService : IPeriodLockStatusService
         FiscalPeriod period,
         PeriodLockConfig? explicitConfig,
         (int EntryOpenDay, int CutoffDay, int ReminderDaysBeforeCutoff) defaults,
-        DateTime nowUtc)
+        FiscalYear? fiscalYear,
+        DateTime businessDate)
     {
-        // Use DateTime.Today for comparison since fiscal periods are stored with DateTimeKind.Unspecified
-        // and represent local calendar dates. This avoids UTC vs Local timezone mismatches.
-        var nowLocal = nowUtc.Date;
+        // Fiscal periods are stored with DateTimeKind.Unspecified and represent ECX business
+        // calendar dates; compare against the business date's calendar day only.
+        var businessDay = businessDate.Date;
 
         var entryOpenDay = explicitConfig?.EntryOpenDay ?? defaults.EntryOpenDay;
         var cutoffDay = explicitConfig?.CutoffDay ?? defaults.CutoffDay;
@@ -78,6 +99,19 @@ public sealed class PeriodLockStatusService : IPeriodLockStatusService
 
         var effectiveEntryOpenDate = period.EndDate.Date.AddDays(entryOpenDay);
         var effectiveCutoffDate = period.EndDate.Date.AddDays(cutoffDay);
+        var graceApplied = false;
+
+        // Final reporting month (confirmed business rule): actual entry for the fiscal
+        // year's last month stays open through the grace deadline — end date + 7 calendar
+        // days, inclusive — even if the configured cutoff would close it earlier. The end
+        // date itself is never moved. Explicit period-lock configs still take precedence,
+        // keeping admin locks and authorized extensions intact.
+        if (explicitConfig is null && fiscalYear is not null
+            && period.EndDate.Date == fiscalYear.EndDate.Date)
+        {
+            effectiveCutoffDate = fiscalYear.FinalMonthGraceDeadline;
+            graceApplied = true;
+        }
 
         var hasExplicitConfig = explicitConfig != null;
         var lockedAt = explicitConfig?.LockedAtUtc;
@@ -85,11 +119,11 @@ public sealed class PeriodLockStatusService : IPeriodLockStatusService
 
         _logger.LogInformation(
             "[PeriodLock] Period={Month}, EndDate={EndDate}, EntryOpenDay={EntryOpenDay}, CutoffDay={CutoffDay}, " +
-            "EffectiveOpen={EffectiveOpen}, EffectiveCutoff={EffectiveCutoff}, NowLocal={NowLocal}, " +
-            "LockedAt={LockedAt}, UnlockedAt={UnlockedAt}, State={State}",
+            "EffectiveOpen={EffectiveOpen}, EffectiveCutoff={EffectiveCutoff}, GraceApplied={GraceApplied}, " +
+            "BusinessDate={BusinessDate}, LockedAt={LockedAt}, UnlockedAt={UnlockedAt}, State={State}",
             period.FiscalMonth, period.EndDate.ToString("yyyy-MM-dd"), entryOpenDay, cutoffDay,
-            effectiveEntryOpenDate.ToString("yyyy-MM-dd"), effectiveCutoffDate.ToString("yyyy-MM-dd"),
-            nowLocal.ToString("yyyy-MM-dd"),
+            effectiveEntryOpenDate.ToString("yyyy-MM-dd"), effectiveCutoffDate.ToString("yyyy-MM-dd"), graceApplied,
+            businessDay.ToString("yyyy-MM-dd"),
             lockedAt?.ToString("yyyy-MM-dd HH:mm") ?? "null",
             unlockedAt?.ToString("yyyy-MM-dd HH:mm") ?? "null",
             "evaluating");
@@ -109,19 +143,19 @@ public sealed class PeriodLockStatusService : IPeriodLockStatusService
         }
 
         // No explicit lock: evaluate based on date window
-        if (nowLocal > effectiveCutoffDate)
+        if (businessDay > effectiveCutoffDate)
         {
-            _logger.LogInformation("[PeriodLock] Period={Month}: State=Locked (past cutoff {CutoffDate}, now {Now})", period.FiscalMonth, effectiveCutoffDate.ToString("yyyy-MM-dd"), nowLocal.ToString("yyyy-MM-dd"));
+            _logger.LogInformation("[PeriodLock] Period={Month}: State=Locked (past cutoff {CutoffDate}, business date {BusinessDate})", period.FiscalMonth, effectiveCutoffDate.ToString("yyyy-MM-dd"), businessDay.ToString("yyyy-MM-dd"));
             return new PeriodLockInfo(PeriodLockState.Locked, effectiveEntryOpenDate, effectiveCutoffDate, entryOpenDay, cutoffDay, reminderDays, hasExplicitConfig, lockedAt, unlockedAt);
         }
 
-        if (nowLocal < effectiveEntryOpenDate)
+        if (businessDay < effectiveEntryOpenDate)
         {
-            _logger.LogInformation("[PeriodLock] Period={Month}: State=NotYetOpen (entry opens {OpenDate}, now {Now})", period.FiscalMonth, effectiveEntryOpenDate.ToString("yyyy-MM-dd"), nowLocal.ToString("yyyy-MM-dd"));
+            _logger.LogInformation("[PeriodLock] Period={Month}: State=NotYetOpen (entry opens {OpenDate}, business date {BusinessDate})", period.FiscalMonth, effectiveEntryOpenDate.ToString("yyyy-MM-dd"), businessDay.ToString("yyyy-MM-dd"));
             return new PeriodLockInfo(PeriodLockState.NotYetOpen, effectiveEntryOpenDate, effectiveCutoffDate, entryOpenDay, cutoffDay, reminderDays, hasExplicitConfig, lockedAt, unlockedAt);
         }
 
-        _logger.LogInformation("[PeriodLock] Period={Month}: State=Open (entry window {Open} to {Cutoff}, now {Now})", period.FiscalMonth, effectiveEntryOpenDate.ToString("yyyy-MM-dd"), effectiveCutoffDate.ToString("yyyy-MM-dd"), nowLocal.ToString("yyyy-MM-dd"));
+        _logger.LogInformation("[PeriodLock] Period={Month}: State=Open (entry window {Open} to {Cutoff}, business date {BusinessDate})", period.FiscalMonth, effectiveEntryOpenDate.ToString("yyyy-MM-dd"), effectiveCutoffDate.ToString("yyyy-MM-dd"), businessDay.ToString("yyyy-MM-dd"));
         return new PeriodLockInfo(PeriodLockState.Open, effectiveEntryOpenDate, effectiveCutoffDate, entryOpenDay, cutoffDay, reminderDays, hasExplicitConfig, lockedAt, unlockedAt);
     }
 

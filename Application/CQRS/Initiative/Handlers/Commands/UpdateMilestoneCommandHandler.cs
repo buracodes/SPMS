@@ -134,7 +134,7 @@ public class UpdateMilestoneCommandHandler : IRequestHandler<UpdateMilestoneComm
 
         var updated = detail is null
             ? null
-            : dtoFactory.BuildDetail(detail).Milestones.FirstOrDefault(m => m.Id == milestone.Id);
+            : (await dtoFactory.BuildDetailAsync(detail, cancellationToken)).Milestones.FirstOrDefault(m => m.Id == milestone.Id);
 
         return new Response<MilestoneDto>
         {

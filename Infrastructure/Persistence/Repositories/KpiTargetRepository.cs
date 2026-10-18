@@ -29,11 +29,16 @@ public class KpiTargetRepository : GenericRepository<KpiTarget>, IKpiTargetRepos
     }
 
     /// <summary>
-    /// Persists targets for a KPI within a fiscal year as an upsert keyed by
+    /// Stages targets for a KPI within a fiscal year as an upsert keyed by
     /// (KpiId, FiscalPeriodId, Granularity). Existing records are updated in place,
     /// new combinations are inserted, and stale combinations are removed. This
     /// guarantees the same record is edited rather than replaced and prevents
     /// duplicate target rows even when a target already exists.
+    /// <para>
+    /// The changes are staged only; this method deliberately does not call SaveChanges so
+    /// the caller can commit the target rewrite together with any other pending changes in
+    /// one transaction.
+    /// </para>
     /// </summary>
     public async Task ReplaceForFiscalYearAsync(Guid kpiId, Guid fiscalYearId, IEnumerable<KpiTarget> targets)
     {
@@ -67,10 +72,16 @@ public class KpiTargetRepository : GenericRepository<KpiTarget>, IKpiTargetRepos
             .ToList();
         if (stale.Count > 0)
         {
-            context.KpiTargets.RemoveRange(stale);
+            // Shared delete convention: never delete a row physically - deactivate it
+            // (IsDeleted plus the generic EntityStatus lifecycle flag) so the historical
+            // target values survive for audit while every filtered read stops seeing
+            // them (the FR-304/FR-902 lineage rules).
+            foreach (var target in stale)
+            {
+                target.IsDeleted = true;
+                target.UpdatedDate = DateTime.UtcNow;
+            }
         }
-
-        await context.SaveChangesAsync();
     }
 
     public async Task<bool> AnyForPeriodsAsync(IEnumerable<Guid> fiscalPeriodIds, CancellationToken cancellationToken = default)

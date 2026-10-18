@@ -84,7 +84,7 @@ public class CreateInitiativeCommandHandler : IRequestHandler<CreateInitiativeCo
         {
             Success = true,
             Message = "Initiative created successfully.",
-            Data = dtoFactory.BuildSummary(initiative)
+            Data = await dtoFactory.BuildSummaryAsync(initiative, cancellationToken: cancellationToken)
         };
     }
 }

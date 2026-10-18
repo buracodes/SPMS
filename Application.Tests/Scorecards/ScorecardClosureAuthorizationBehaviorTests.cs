@@ -350,15 +350,34 @@ public class ScorecardClosureAuthorizationBehaviorTests
     }
 
     [Fact]
-    public async Task EndedFiscalYear_OpenScorecard_IsRejected()
+    public async Task FiscalYear_DuringFinalMonthGrace_IsStillOpen()
     {
-        // FR-703 (item: closure timing): a fiscal year whose end date has passed in ECX
-        // business time is closed even when the nightly closure job has not flipped its
-        // status yet. The scorecard itself is still Active.
+        // Confirmed business rule (final-month grace): structural edits for a year ending
+        // 2100-06-30 remain permitted through the grace deadline 2100-07-07, inclusive;
+        // on 2100-07-05 the closure guard must not reject the write.
         await using var lease = await NewLeaseAsync();
         var f = lease.Fixture;
 
-        var clock = TestBusinessClock.On(new DateTime(2100, 7, 2, 8, 0, 0, DateTimeKind.Utc));
+        var clock = TestBusinessClock.On(new DateTime(2100, 7, 5, 8, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateBehavior<UpdateGoalCommandRequest, Response<GoalDto>>(lease, clock);
+        var invoked = false;
+        await behavior.Handle(new UpdateGoalCommandRequest { Id = f.GoalId, Name = "G2" },
+            _ => { invoked = true; return Task.FromResult(new Response<GoalDto>()); }, CancellationToken.None);
+
+        Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task FiscalYear_AfterGraceExpiry_IsRejected()
+    {
+        // FR-703 (item: closure timing): once the final-month grace period has expired
+        // (from 2100-07-08, one day after the grace deadline 2100-07-07) the year is
+        // read-only even when the nightly closure job has not flipped its status yet.
+        // The scorecard itself is still Active.
+        await using var lease = await NewLeaseAsync();
+        var f = lease.Fixture;
+
+        var clock = TestBusinessClock.On(new DateTime(2100, 7, 8, 8, 0, 0, DateTimeKind.Utc));
         var behavior = CreateBehavior<UpdateGoalCommandRequest, Response<GoalDto>>(lease, clock);
         await Assert.ThrowsAsync<ScorecardClosedException>(() =>
             behavior.Handle(new UpdateGoalCommandRequest { Id = f.GoalId, Name = "G2" },

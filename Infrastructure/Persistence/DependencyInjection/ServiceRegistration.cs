@@ -42,6 +42,7 @@ services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
             services.AddScoped<IOrganizationProfileRepository, OrganizationProfileRepository>();
             services.AddScoped<IPeriodLockConfigRepository, PeriodLockConfigRepository>();
             services.AddScoped<ISystemConfigRepository, SystemConfigRepository>();
+            services.AddScoped<IRagThresholdConfigRepository, RagThresholdConfigRepository>();
             services.AddScoped<IUnitOfMeasureRepository, UnitOfMeasureRepository>();
             services.AddScoped<IKpiScoreSnapshotRepository, KpiScoreSnapshotRepository>();
             services.AddScoped<IKraScoreSnapshotRepository, KraScoreSnapshotRepository>();

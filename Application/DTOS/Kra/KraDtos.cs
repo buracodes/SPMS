@@ -40,6 +40,11 @@ public class GetAllKraDto : CommonEntityDto
     public bool IsActive { get; set; }
     public int KpiCount { get; set; }
 
+    /// <summary>FR-302 form fields, resolved server side so the edit form can repopulate them.</summary>
+    public string? Icon { get; set; }
+    public Guid? StrategicThemeId { get; set; }
+    public string? UnitMeasure { get; set; }
+
     /// <summary>Display names resolved server side so grids never have to show a guid.</summary>
     public string? ScorecardName { get; set; }
     public string? GoalName { get; set; }

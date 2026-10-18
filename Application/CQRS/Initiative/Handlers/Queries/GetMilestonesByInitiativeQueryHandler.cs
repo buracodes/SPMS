@@ -34,7 +34,7 @@ public class GetMilestonesByInitiativeQueryHandler
         {
             Success = true,
             Message = "Milestones retrieved successfully.",
-            Data = dtoFactory.BuildDetail(initiative).Milestones
+            Data = (await dtoFactory.BuildDetailAsync(initiative, cancellationToken)).Milestones
         };
     }
 }

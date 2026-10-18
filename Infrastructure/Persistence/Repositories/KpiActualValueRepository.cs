@@ -12,6 +12,23 @@ public class KpiActualValueRepository : GenericRepository<KpiActualValue>, IKpiA
     {
     }
 
+    public async Task SoftDeleteAutomatedSameDayAsync(Guid kpiId, Guid fiscalPeriodId, DateTime utcDay)
+    {
+        var dayEnd = utcDay.AddDays(1);
+        var superseded = await context.KpiActualValues
+            .Where(v => v.KpiId == kpiId
+                && v.FiscalPeriodId == fiscalPeriodId
+                && v.DataSource == Domain.Enums.KpiDataSource.Automated
+                && v.AsOfDate >= utcDay && v.AsOfDate < dayEnd)
+            .ToListAsync();
+
+        foreach (var previous in superseded)
+        {
+            previous.IsDeleted = true;
+            previous.UpdatedDate = DateTime.UtcNow;
+        }
+    }
+
     public async Task<KpiActualValue?> GetLatestAsync(Guid kpiId, Guid fiscalPeriodId, KpiDataSource dataSource)
     {
         return await context.KpiActualValues

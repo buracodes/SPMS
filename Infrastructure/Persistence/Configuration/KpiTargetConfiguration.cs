@@ -21,6 +21,10 @@ public class KpiTargetConfiguration : IEntityTypeConfiguration<KpiTarget>
             .HasForeignKey(t => t.FiscalPeriodId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasIndex(t => new { t.KpiId, t.FiscalPeriodId, t.Granularity }).IsUnique();
+        // Unique only among active rows: a deactivated (soft-deleted) stale combination
+        // must be re-creatable later without clashing with its historical record.
+        builder.HasIndex(t => new { t.KpiId, t.FiscalPeriodId, t.Granularity })
+            .IsUnique()
+            .HasFilter("[IsDeleted] = 0");
     }
 }

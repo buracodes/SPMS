@@ -5,6 +5,7 @@ using Application.CQRS.KpiTargets.Requests.Commands;
 using Application.CQRS.KpiTargets.Requests.Queries;
 using Application.DTOS.KpiTarget;
 using Application.Exceptions;
+using Application.Interface;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Jobs;
@@ -14,6 +15,7 @@ using Application.Validation.KpiTarget;
 using Domain.Entities;
 using Domain.Enums;
 using FluentValidation;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -57,17 +59,21 @@ public class KpiTargetBulkHandlerTests
 
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Win mandates", Weight = 100 };
+        var otherGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = otherScorecard.Id, Name = "Grow other volume", Weight = 100 };
+        var otherKra = new Kra { Id = Guid.NewGuid(), ScorecardId = otherScorecard.Id, GoalId = otherGoal.Id, Name = "Win other mandates", Weight = 100 };
+        var staleGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = staleScorecard.Id, Name = "Grow last year volume", Weight = 100 };
+        var staleKra = new Kra { Id = Guid.NewGuid(), ScorecardId = staleScorecard.Id, GoalId = staleGoal.Id, Name = "Win last year mandates", Weight = 100 };
 
         var firstKpi = NewKpi(scorecard.Id, kra.Id, "Revenue growth");
         var secondKpi = NewKpi(scorecard.Id, kra.Id, "Margin growth");
-        var divisionKpi = NewKpi(otherScorecard.Id, null, "Division KPI");
-        var otherYearKpi = NewKpi(staleScorecard.Id, null, "Last year KPI");
+        var divisionKpi = NewKpi(otherScorecard.Id, otherKra.Id, "Division KPI");
+        var otherYearKpi = NewKpi(staleScorecard.Id, staleKra.Id, "Last year KPI");
 
         lease.Context.FiscalYears.AddRange(fiscalYear, otherFiscalYear);
         lease.Context.FiscalPeriods.AddRange(calendar.GeneratePeriods(fiscalYear));
         lease.Context.Scorecards.AddRange(scorecard, otherScorecard, staleScorecard);
-        lease.Context.Goals.Add(goal);
-        lease.Context.Kras.Add(kra);
+        lease.Context.Goals.AddRange(goal, otherGoal, staleGoal);
+        lease.Context.Kras.AddRange(kra, otherKra, staleKra);
         lease.Context.Kpis.AddRange(firstKpi, secondKpi, divisionKpi, otherYearKpi);
         lease.Context.SaveChanges();
 
@@ -85,6 +91,7 @@ public class KpiTargetBulkHandlerTests
             KraId = kraId,
             Name = name,
             Weight = 50,
+            IsCumulative = true,
             DataSource = KpiDataSource.Manual,
             KpiType = KpiType.Lagging
         };
@@ -117,17 +124,20 @@ public class KpiTargetBulkHandlerTests
         services.AddScoped<IKpiTargetRepository>(_ => new KpiTargetRepository(lease.Context));
         services.AddSingleton<IFiscalCalendarService, FiscalCalendarService>();
         services.AddScoped<ISpmsJobScheduler, TestSpmsJobScheduler>();
+        services.AddScoped<IUnitOfWork>(_ => new SpmsUnitOfWork(lease.Context));
 
         return services.BuildServiceProvider().CreateScope().ServiceProvider.GetRequiredService<IMediator>();
     }
 
     private static SetKpiTargetsItemDto Item(Guid kpiId, decimal annual = 100)
     {
+        // Reconciled cumulative dataset: the quarterly targets take annual/4 each and
+        // the monthly targets annual/12 each, so the sums always match the annual.
         return new SetKpiTargetsItemDto
         {
             KpiId = kpiId,
-            MonthlyTargets = Enumerable.Range(1, 12).Select(m => (decimal)m).ToList(),
-            QuarterlyTargets = Enumerable.Range(1, 4).Select(q => (decimal)q * 3).ToList(),
+            MonthlyTargets = Enumerable.Repeat(annual / 12m, 12).ToList(),
+            QuarterlyTargets = Enumerable.Repeat(annual / 4m, 4).ToList(),
             AnnualTarget = annual
         };
     }
@@ -181,7 +191,7 @@ public class KpiTargetBulkHandlerTests
         Assert.Equal(250, annual.TargetValue);
         Assert.Equal(12, annual.FiscalMonth);
 
-        var q1 = Assert.Single(bundle.Targets, t => t.Granularity == TargetGranularity.Quarterly && t.TargetValue == 3);
+        var q1 = Assert.Single(bundle.Targets, t => t.Granularity == TargetGranularity.Quarterly && t.FiscalMonth == 3);
         Assert.Equal(1, q1.Quarter);
         Assert.Equal(3, q1.FiscalMonth);
 

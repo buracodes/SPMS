@@ -137,7 +137,7 @@ public class UpdateMilestoneProgressCommandHandler
         {
             Success = true,
             Message = BuildMessage(dtoFactory.BuildProgress(updated)),
-            Data = dtoFactory.BuildDetail(updated)
+            Data = await dtoFactory.BuildDetailAsync(updated, cancellationToken)
         };
     }
 

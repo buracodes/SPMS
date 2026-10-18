@@ -1,3 +1,4 @@
+using Application.Dashboard;
 using Application.DTOS.Division;
 using Application.Interface.IService;
 using Domain.Entities;
@@ -13,7 +14,8 @@ namespace Application.CQRS.Division
             DivisionPeriodResult? performance = null,
             Domain.Entities.Scorecard? corporateScorecard = null,
             IReadOnlyDictionary<Guid, IReadOnlyList<KpiTarget>>? kpiTargets = null,
-            IReadOnlyList<FiscalPeriod>? fiscalPeriods = null)
+            IReadOnlyList<FiscalPeriod>? fiscalPeriods = null,
+            RagThresholds? thresholds = null)
         {
             var contributedGoalIds = plan.Contributions.Select(c => c.GoalId).ToHashSet();
             var corporateGoalById = corporateGoals.ToDictionary(g => g.Id);
@@ -47,7 +49,8 @@ namespace Application.CQRS.Division
                         g,
                         ResolveGoalScore(performance, g.Id),
                         performance?.Kpis,
-                        kpiTargets))
+                        kpiTargets,
+                        thresholds))
                     .ToList(),
                 FiscalPeriods = fiscalPeriods == null
                     ? new List<DivisionFiscalPeriodDto>()
@@ -72,7 +75,8 @@ namespace Application.CQRS.Division
             Domain.Entities.DivisionGoal goal,
             EntityScorePeriod? score,
             IReadOnlyDictionary<Guid, KpiScorePeriod>? kpiScores,
-            IReadOnlyDictionary<Guid, IReadOnlyList<KpiTarget>>? kpiTargets = null)
+            IReadOnlyDictionary<Guid, IReadOnlyList<KpiTarget>>? kpiTargets = null,
+            RagThresholds? thresholds = null)
         {
             return new DivisionGoalDto
             {
@@ -85,13 +89,14 @@ namespace Application.CQRS.Division
                 Weight = goal.Weight,
                 ContributionDescription = goal.ContributionDescription,
                 Score = score?.PeriodScore,
-                Status = score?.PeriodScore is null ? null : RagFromScore(score.PeriodScore.Value),
+                Status = score?.PeriodScore is null ? null : RagFromScore(score.PeriodScore.Value, thresholds),
                 Kpis = goal.Kpis
                     .OrderBy(k => k.Name)
                     .Select(k => BuildKpi(
                         k,
                         ResolveKpiScore(kpiScores, k.Id),
-                        ResolveKpiTargets(kpiTargets, k.Id)))
+                        ResolveKpiTargets(kpiTargets, k.Id),
+                        thresholds))
                     .ToList()
             };
         }
@@ -102,7 +107,8 @@ namespace Application.CQRS.Division
         public static DivisionKpiDto BuildKpi(
             Domain.Entities.Kpi kpi,
             KpiScorePeriod? kpiScore,
-            IReadOnlyList<KpiTarget>? targets = null)
+            IReadOnlyList<KpiTarget>? targets = null,
+            RagThresholds? thresholds = null)
         {
             return new DivisionKpiDto
             {
@@ -129,7 +135,7 @@ namespace Application.CQRS.Division
                 Score = kpiScore?.PeriodScore,
                 Target = kpiScore?.PeriodTarget,
                 Actual = kpiScore?.PeriodActual,
-                Status = kpiScore?.PeriodScore is null ? null : RagFromScore(kpiScore.PeriodScore.Value),
+                Status = kpiScore?.PeriodScore is null ? null : RagFromScore(kpiScore.PeriodScore.Value, thresholds),
                 Targets = targets == null
                     ? new List<DivisionKpiTargetDto>()
                     : targets
@@ -173,15 +179,12 @@ namespace Application.CQRS.Division
         };
 
         /// <summary>
-        /// FR-607 / FR-908 RAG bands (Green >= 95, Amber >= 70, else Red). These now match
-        /// <c>DashboardRag</c>; the division-plan page previously used 70/50 bands, so the
-        /// same score could be coloured differently on the plan and the report.
+        /// FR-607 / FR-908 RAG bands, delegated to the single authoritative evaluator
+        /// (<c>DashboardRag</c> + configured thresholds). The division-plan page previously used its
+        /// own 70/50 bands, so the same score could be coloured differently on the plan and the
+        /// report. A missing score stays <c>null</c> (the plan DTO contract) and is never banded Red.
         /// </summary>
-        public static string RagFromScore(decimal score)
-        {
-            if (score >= 95m) return "Green";
-            if (score >= 70m) return "Amber";
-            return "Red";
-        }
+        public static string RagFromScore(decimal score, RagThresholds? thresholds = null)
+            => DashboardRag.FromScore(score, thresholds);
     }
 }

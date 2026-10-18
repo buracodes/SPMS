@@ -67,6 +67,7 @@ namespace Application.DependencyInjection
             services.AddSingleton<IFiscalPeriodIdentifierFactory, FiscalPeriodIdentifierFactory>();
             services.AddSingleton<IQuarterPeriodsStrategy, QuarterPeriodsStrategy>();
 
+            services.AddScoped<IRagThresholdService, RagThresholdService>();
             services.AddScoped<IReportingService, ReportingService>();
             services.AddScoped<IDivisionReportService, DivisionReportService>();
             services.AddScoped<IRoleDashboardService, RoleDashboardService>();

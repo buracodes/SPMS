@@ -94,7 +94,7 @@ public class AddInitiativeDependencyCommandHandler
         {
             Success = true,
             Message = $"Dependency added: '{initiative.Name}' depends on '{prerequisite.Name}'.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 
@@ -213,7 +213,7 @@ public class RemoveInitiativeDependencyCommandHandler
         {
             Success = true,
             Message = "Dependency removed.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 }

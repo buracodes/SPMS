@@ -14,10 +14,12 @@ namespace Application.CQRS.FiscalYear.Handler
     public class GetFiscalYearHandler : IRequestHandler<GetFiscalYearRequest, Response<List<FiscalYearDto>>>
     {
         private readonly IFiscalYearRepository fiscalYearRepository;
+        private readonly IScorecardRepository scorecardRepository;
         private readonly IMapper mapper;
-        public GetFiscalYearHandler(IFiscalYearRepository _fiscalYearRepository, IMapper _mapper)
+        public GetFiscalYearHandler(IFiscalYearRepository _fiscalYearRepository, IScorecardRepository _scorecardRepository, IMapper _mapper)
         {
             fiscalYearRepository = _fiscalYearRepository;
+            scorecardRepository = _scorecardRepository;
             mapper = _mapper;
         }
 
@@ -25,6 +27,16 @@ namespace Application.CQRS.FiscalYear.Handler
         {
             var entity = await fiscalYearRepository.GetActiveAsync(cancellationToken);
             var dtos = mapper.Map<List<FiscalYearDto>>(entity);
+
+            // Flag, in one query, which years already carry scorecards so the UI can lock their
+            // dates. The entity has no such column, so AutoMapper leaves HasScorecards false and
+            // it is filled in here.
+            var yearsWithScorecards = await scorecardRepository.GetFiscalYearIdsWithScorecardsAsync(cancellationToken);
+            foreach (var dto in dtos)
+            {
+                dto.HasScorecards = yearsWithScorecards.Contains(dto.Id);
+            }
+
             return new Response<List<FiscalYearDto>>
             {
                 Success = true,

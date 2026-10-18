@@ -23,8 +23,13 @@ public class FiscalYearRepository : GenericRepository<FiscalYear>, IFiscalYearRe
 
     public async Task<bool> ExistsWithLabelAsync(string label, Guid? excludeId = null, CancellationToken cancellationToken = default)
     {
+        // The unique index on Label is collation-defined, so the application check must
+        // agree with the database on case, otherwise a case-only duplicate reaches SQL as
+        // a unique violation (500) instead of a validation failure (400).
+        var lowered = label.ToLower();
+
         return await context.FiscalYears
-            .Where(d => d.Label == label && (excludeId == null || d.Id != excludeId))
+            .Where(d => d.Label.ToLower() == lowered && (excludeId == null || d.Id != excludeId))
             .AnyAsync(cancellationToken);
     }
 

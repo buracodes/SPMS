@@ -6,6 +6,7 @@ using Application.Interface.IService;
 using Application.Jobs;
 using Application.Responses;
 using Domain.Entities;
+using Domain.Enums;
 using MediatR;
 
 namespace Application.CQRS.KpiActuals.Handlers.Commands
@@ -71,6 +72,16 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
                 RecordedBy = currentUserService.UserId,
                 Note = dto.Note
             };
+
+            // FR-309 automated feeds store each day's pull as its own record while a
+            // same-day re-poll keeps only the latest value for that day: earlier
+            // automated rows from the same UTC date are deactivated (never deleted)
+            // before the new write.
+            if (dto.DataSource == KpiDataSource.Automated)
+            {
+                // FR-309: a same-day re-poll keeps only the latest value for that day.
+                await kpiActualValueRepository.SoftDeleteAutomatedSameDayAsync(kpi.Id, period.Id, entity.AsOfDate.Date);
+            }
 
             // FR-703: when writing to a closed/locked period the LockAuthorizationBehavior
             // has already required an override reason; carry it into the append-only audit

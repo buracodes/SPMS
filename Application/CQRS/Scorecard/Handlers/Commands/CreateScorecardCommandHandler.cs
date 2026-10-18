@@ -44,7 +44,9 @@ public class CreateScorecardCommandHandler : IRequestHandler<CreateScorecardComm
             ScorecardStatus = Domain.Enums.ScorecardStatus.Active
         };
 
-        await scorecardRepository.Add(scorecard);
+        // Stage the new scorecard and commit once through the unit of work. AddWithoutSave is
+        // used so this handler owns the single commit and does not double-save.
+        await scorecardRepository.AddWithoutSave(scorecard);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return new Response<ScorecardDto>

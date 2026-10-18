@@ -20,7 +20,7 @@ public class UpdateKraCommandHandler : IRequestHandler<UpdateKraCommandRequest, 
         IGoalRepository _goalRepository,
         IUnitOfWork _unitOfWork)
     {
-        kraRepository = _kraRepository;
+       kraRepository = _kraRepository;
         goalRepository = _goalRepository;
         unitOfWork = _unitOfWork;
     }
@@ -30,43 +30,61 @@ public class UpdateKraCommandHandler : IRequestHandler<UpdateKraCommandRequest, 
         var kra = await kraRepository.GetByIdWithKpisAsync(request.Id)
             ?? throw new NotFoundException(nameof(KraEntity), request.Id);
 
-        if (request.Weight.HasValue && request.Weight.Value != kra.Weight)
+        // FR-302 defense in depth: holds even if FluentValidation is bypassed.
+        if (request.Weight.HasValue && (request.Weight.Value <= 0m || request.Weight.Value > 100m))
         {
-            var goalWithKras = await goalRepository.GetByIdWithKrasAsync(kra.GoalId);
-            var otherWeight = goalWithKras?.Kras.Where(k => k.Id != kra.Id).Sum(k => k.Weight) ?? 0m;
-            if (otherWeight + request.Weight.Value > 100m)
-                throw new BadRequestException($"Total KRA weight under this goal cannot exceed 100%. Current total excluding this KRA is {otherWeight}%.");
+            throw new BadRequestException("KRA weight must be greater than 0 and 100 or less.");
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Name))
+        // Whole mutation - name-dup check, weight budget, assignment, save - runs in one
+        // serializable transaction (ADR-009), mirroring the goal update handler.
+        await unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            var updatedName = request.Name.Trim();
-            var goalWithKras = await goalRepository.GetByIdWithKrasAsync(kra.GoalId);
-            if (goalWithKras?.Kras.Any(k => !k.IsDeleted && k.Id != kra.Id
-                && string.Equals(k.Name, updatedName, StringComparison.OrdinalIgnoreCase)) == true)
-                throw new BadRequestException($"A KRA named '{updatedName}' already exists under this goal.");
-            kra.Name = updatedName;
-        }
+            if (request.Weight.HasValue && request.Weight.Value != kra.Weight)
+            {
+                // Total of the OTHER KRAs under the same goal: SQL-side SUM that
+                // excludes this KRA (and soft-deleted rows via the global filter).
+                var otherWeight = await kraRepository.GetWeightsSumAsync(
+                    kra.GoalId, kra.Id, cancellationToken: cancellationToken);
+                if (otherWeight + request.Weight.Value > 100m)
+                {
+                    throw new BadRequestException($"Total KRA weight under this goal cannot exceed 100%. Current total excluding this KRA is {otherWeight:F2}%.");
+                }
+            }
 
-        if (request.Description != null)
-            kra.Description = request.Description;
+            if (!string.IsNullOrWhiteSpace(request.Name))
+            {
+                var updatedName = request.Name.Trim();
+                var goalWithKras = await goalRepository.GetByIdWithKrasAsync(kra.GoalId);
+                if (goalWithKras?.Kras.Any(k => k.Id != kra.Id
+                    && string.Equals(k.Name, updatedName, StringComparison.OrdinalIgnoreCase)) == true)
+                {
+                    throw new BadRequestException($"A KRA named '{updatedName}' already exists under this goal.");
+                }
+                kra.Name = updatedName;
+            }
 
-        if (request.Icon != null)
-            kra.Icon = request.Icon;
+            if (request.Description != null)
+                kra.Description = request.Description;
 
-        if (request.StrategicThemeId.HasValue)
-            kra.StrategicThemeId = request.StrategicThemeId.Value;
+            if (request.Icon != null)
+                kra.Icon = request.Icon;
 
-        if (request.UnitMeasure != null)
-            kra.UnitMeasure = request.UnitMeasure;
+            if (request.StrategicThemeId.HasValue)
+                kra.StrategicThemeId = request.StrategicThemeId.Value;
 
-        if (request.Weight.HasValue)
-            kra.Weight = request.Weight.Value;
+            if (request.UnitMeasure != null)
+                kra.UnitMeasure = request.UnitMeasure;
 
-        if (request.IsActive.HasValue)
-            kra.IsActive = request.IsActive.Value;
+            if (request.Weight.HasValue)
+                kra.Weight = request.Weight.Value;
 
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+            if (request.IsActive.HasValue)
+                kra.IsActive = request.IsActive.Value;
+
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return kra;
+        });
 
         return new Response<KraDto>
         {

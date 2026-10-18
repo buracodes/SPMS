@@ -20,8 +20,10 @@ namespace Application.Services;
 ///   <item>Fiscal years may not overlap and their labels must be unique.</item>
 ///   <item>A year that is closed, archived, or whose end date has already passed is
 ///   immutable — it must remain a read-only historical record.</item>
-///   <item>Dates cannot change once the period calendar has been generated (periods are
-///   referenced by targets, actual values and period-lock configs).</item>
+///   <item>Dates can be corrected only while nothing depends on the calendar: once a
+///   scorecard, target or actual value exists the year's dates become read-only, because a
+///   change would invalidate the scorecard periods, targets and snapshots. A date edit
+///   regenerates the twelve monthly periods.</item>
 ///   <item>A year carrying scorecards, targets or actual values cannot be deleted:
 ///   deleting it would destroy historical scorecards.</item>
 /// </list>
@@ -96,8 +98,12 @@ public class FiscalYearLifecycleGuard
     }
 
     /// <summary>
-    /// Guards <see cref="FiscalYearController"/> update against changes that bypass
-    /// closure enforcement or alter a calendar that is already in use.
+    /// Guards <see cref="FiscalYearController"/> update. The year must still be Open and not
+    /// past its end date. A label change is always allowed. A start-date change is a correction
+    /// of the calendar and is allowed only while nothing depends on the existing periods: it is
+    /// rejected once a scorecard, KPI target or actual value exists. The end date is never taken
+    /// from the client — it is always derived from the new start date — and the new span must not
+    /// overlap another year.
     /// </summary>
     public async Task EnsureCanUpdateAsync(FiscalYear year, UpdateFiscalYearDto dto, DateTime businessDate, CancellationToken cancellationToken = default)
     {
@@ -115,38 +121,57 @@ public class FiscalYearLifecycleGuard
                 $"Fiscal year '{year.Label}' ended on {year.EndDate:yyyy-MM-dd} and is read-only; it can no longer be edited.");
         }
 
-        var newStartDate = (dto.StartDate ?? year.StartDate).Date;
-        var newEndDate = (dto.EndDate ?? year.EndDate).Date;
-        if (newStartDate > newEndDate)
-        {
-            throw new BadRequestException("Fiscal year start date must be on or before its end date.");
-        }
-
         if (dto.Label != null)
         {
             var label = dto.Label.Trim();
-            if (label.Length > 0 && label != year.Label
+
+            // An explicitly supplied label must be non-blank; a blank/whitespace value
+            // would otherwise wipe the existing label in the controller (null means "no change").
+            if (label.Length == 0)
+            {
+                throw new BadRequestException("Fiscal year label cannot be blank.");
+            }
+
+            if (label != year.Label
                 && await fiscalYearRepository.ExistsWithLabelAsync(label, year.Id, cancellationToken))
             {
                 throw new BadRequestException($"A fiscal year labelled '{label}' already exists.");
             }
         }
 
-        var datesChanged = newStartDate != year.StartDate.Date || newEndDate != year.EndDate.Date;
-        if (!datesChanged)
+        if (dto.StartDate is null)
         {
             return;
         }
 
-        // Dates are frozen as soon as the monthly calendar exists, because the periods are
-        // referenced by targets, actual values and period-lock configs. This is checked before
-        // the shape rules below so an in-use calendar is always rejected the same way.
-        var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(year.Id);
-        if (periods.Count > 0)
+        var newStartDate = dto.StartDate.Value.Date;
+        if (newStartDate == year.StartDate.Date)
+        {
+            return;
+        }
+
+        // The calendar may only be corrected while nothing is built on it. A scorecard owns the
+        // year's periods, targets and score snapshots; changing the dates afterwards would leave
+        // all of them pointing at a span that no longer exists.
+        if (await scorecardRepository.AnyForFiscalYearAsync(year.Id, cancellationToken))
         {
             throw new FiscalYearMutationException(
                 year.Id,
-                $"Fiscal year '{year.Label}' already has a generated period calendar; its start and end dates can no longer be changed.");
+                $"Fiscal year '{year.Label}' already has scorecards; its dates are read-only because changing them would invalidate scorecard periods and targets.");
+        }
+
+        var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(year.Id);
+        var periodIds = periods.Select(p => p.Id).ToList();
+        if (periodIds.Count > 0)
+        {
+            var hasTargets = await kpiTargetRepository.AnyForPeriodsAsync(periodIds, cancellationToken);
+            var hasActuals = await kpiActualValueRepository.AnyForPeriodsAsync(periodIds, cancellationToken);
+            if (hasTargets || hasActuals)
+            {
+                throw new FiscalYearMutationException(
+                    year.Id,
+                    $"Fiscal year '{year.Label}' contains KPI targets or actual values; its dates are read-only because changing them would destroy historical data.");
+            }
         }
 
         if (newStartDate.Day != 1)
@@ -155,11 +180,6 @@ public class FiscalYearLifecycleGuard
         }
 
         var expectedEnd = fiscalCalendarService.ComputeEndDate(newStartDate);
-        if (newEndDate != expectedEnd)
-        {
-            throw new BadRequestException(
-                $"A fiscal year must span twelve consecutive months; a start of {newStartDate:yyyy-MM-dd} means the end date must be {expectedEnd:yyyy-MM-dd}.");
-        }
 
         if (await fiscalYearRepository.AnyOverlappingAsync(newStartDate, expectedEnd, year.Id, cancellationToken))
         {

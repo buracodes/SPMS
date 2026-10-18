@@ -72,7 +72,7 @@ public class PutInitiativeOnHoldCommandHandler : IRequestHandler<PutInitiativeOn
         {
             Success = true,
             Message = "Initiative put on hold.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 }
@@ -138,7 +138,7 @@ public class ResumeInitiativeCommandHandler : IRequestHandler<ResumeInitiativeCo
         {
             Success = true,
             Message = "Initiative resumed.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 }
@@ -202,7 +202,7 @@ public class CancelInitiativeCommandHandler : IRequestHandler<CancelInitiativeCo
         {
             Success = true,
             Message = "Initiative cancelled.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 }

@@ -65,11 +65,13 @@ public class KpiActualHandlerTests
                 new KpiRepository(lease.Context),
                 new FiscalYearRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
-                actualRepo),
+                actualRepo,
+                currentUserService ?? new TestCurrentUserService()),
             new GetActualValueHistoryQueryHandler(
                 new KpiRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
-                actualRepo));
+                actualRepo,
+                currentUserService ?? new TestCurrentUserService()));
     }
 
     [Fact]
@@ -335,5 +337,92 @@ public class KpiActualHandlerTests
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("KPI", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("period", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ── FR-305 division read scoping ────────────────────────────────────────
+
+    [Fact]
+    public async Task GetActualValues_DivisionAccountForeignKpi_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        var ownedBy = new Division { Id = Guid.NewGuid(), Name = "Operations", Code = "OPS" };
+        var caller = new Division { Id = Guid.NewGuid(), Name = "Sales", Code = "SAL" };
+        lease.Context.Divisions.AddRange(ownedBy, caller);
+        var kpi = await lease.Context.Kpis.FirstAsync(k => k.Id == kpiId);
+        kpi.DivisionOwnerId = ownedBy.Id;
+        await lease.Context.SaveChangesAsync();
+
+        var divisionUser = new TestCurrentUserService { DivisionId = caller.Id };
+        var (_, get, _) = CreateHandlers(lease, divisionUser);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            get.Handle(new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetActualValues_DivisionAccountOwnKpi_SucceedsWithoutValues()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        var ownedBy = new Division { Id = Guid.NewGuid(), Name = "Operations", Code = "OPS" };
+        lease.Context.Divisions.Add(ownedBy);
+        var kpi = await lease.Context.Kpis.FirstAsync(k => k.Id == kpiId);
+        kpi.DivisionOwnerId = ownedBy.Id;
+        await lease.Context.SaveChangesAsync();
+
+        var divisionUser = new TestCurrentUserService { DivisionId = ownedBy.Id };
+        var (_, get, _) = CreateHandlers(lease, divisionUser);
+
+        var response = await get.Handle(new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+        Assert.True(response.Success);
+        Assert.Empty(response.Data!.Values);
+    }
+
+    [Fact]
+    public async Task GetActualValues_UserOwnedKpiVisibleToOwner()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        var owner = Guid.NewGuid();
+        var callerDivision = new Division { Id = Guid.NewGuid(), Name = "Sales", Code = "SAL" };
+        lease.Context.Divisions.Add(callerDivision);
+        lease.Context.Users.Add(new User { Id = owner, Username = "kpi.owner", FullName = "Kpi Owner", PasswordHash = "hash", DivisionId = callerDivision.Id });
+        var kpi = await lease.Context.Kpis.FirstAsync(k => k.Id == kpiId);
+        kpi.OwnerId = owner;
+        await lease.Context.SaveChangesAsync();
+
+        var ownerUser = new TestCurrentUserService { UserId = owner, DivisionId = callerDivision.Id };
+        var (_, get, history) = CreateHandlers(lease, ownerUser);
+
+        var response = await get.Handle(new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+        Assert.True(response.Success);
+
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+        var historyResponse = await history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None);
+        Assert.True(historyResponse.Success);
+    }
+
+    [Fact]
+    public async Task GetActualValueHistory_DivisionAccountForeignKpi_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (_, _, _, kpiId) = CreateFixture(lease);
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+
+        var ownedBy = new Division { Id = Guid.NewGuid(), Name = "Operations", Code = "OPS" };
+        lease.Context.Divisions.Add(ownedBy);
+        var kpi = await lease.Context.Kpis.FirstAsync(k => k.Id == kpiId);
+        kpi.DivisionOwnerId = ownedBy.Id;
+        await lease.Context.SaveChangesAsync();
+
+        var divisionUser = new TestCurrentUserService { DivisionId = Guid.NewGuid() };
+        var (_, _, history) = CreateHandlers(lease, divisionUser);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None));
     }
 }

@@ -182,7 +182,7 @@ public class UpdateInitiativeCommandHandler : IRequestHandler<UpdateInitiativeCo
         {
             Success = true,
             Message = "Initiative updated successfully.",
-            Data = dtoFactory.BuildSummary(initiative, milestones)
+            Data = await dtoFactory.BuildSummaryAsync(initiative, milestones, cancellationToken)
         };
     }
 

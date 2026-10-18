@@ -126,12 +126,51 @@ public class GetPeriodLockStatusQueryHandlerTests
             }, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task NoCalendar_ThrowsBadRequest_AndDoesNotCreatePeriods()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fiscalYear = new FiscalCalendarService().CreateFiscalYear(2031);
+
+        var scorecard = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = fiscalYear.Id,
+            Name = "No Calendar",
+            Scope = ScorecardScope.Corporate
+        };
+
+        lease.Context.FiscalYears.Add(fiscalYear);
+        lease.Context.Scorecards.Add(scorecard);
+        await lease.Context.SaveChangesAsync();
+
+        var handler = new GetPeriodLockStatusQueryHandler(
+            new ScorecardRepository(lease.Context),
+            new FiscalPeriodRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            new PeriodLockConfigRepository(lease.Context),
+            CreateLockService(lease),
+            new FiscalCalendarService());
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            handler.Handle(new GetPeriodLockStatusQueryRequest
+            {
+                ScorecardId = scorecard.Id,
+                FiscalYearId = fiscalYear.Id
+            }, CancellationToken.None));
+
+        // The GET must be side-effect free: no periods may have been generated.
+        Assert.Equal(0, await lease.Context.FiscalPeriods.CountAsync(p => p.FiscalYearId == fiscalYear.Id));
+    }
+
     private static PeriodLockStatusService CreateLockService(TestDbContextLease lease)
     {
         return new PeriodLockStatusService(
             new FiscalPeriodRepository(lease.Context),
             new PeriodLockConfigRepository(lease.Context),
             new SystemConfigRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            TestBusinessClock.Real(),
             NullLogger<PeriodLockStatusService>.Instance);
     }
 

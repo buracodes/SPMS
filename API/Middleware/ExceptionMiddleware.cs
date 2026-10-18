@@ -72,7 +72,18 @@ namespace API.Middleware
 
                 case ValidationExceptions ex:
                     statusCode = HttpStatusCode.BadRequest;
-                    title = "One or more validation errors occurred.";
+                    // Surface the specific message when a single rule failed so
+                    // clients (and toasts) show e.g. "Goal weight must be greater
+                    // than 0." instead of a generic validation banner. The full
+                    // per-field breakdown is still provided in `errors`.
+                    var validationMessages = ex.Errors
+                        .Select(e => e.ErrorMessage)
+                        .Where(m => !string.IsNullOrWhiteSpace(m))
+                        .Distinct()
+                        .ToList();
+                    title = validationMessages.Count == 1
+                        ? validationMessages[0]
+                        : "One or more validation errors occurred.";
                     extensions["errors"] = ex.Errors
                         .GroupBy(e => e.Field)
                         .ToDictionary(

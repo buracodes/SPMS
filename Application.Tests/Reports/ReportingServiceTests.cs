@@ -39,7 +39,8 @@ public class ReportingServiceTests
                 new KpiTargetRepository(lease.Context),
                 new KpiActualValueRepository(lease.Context),
                 new DivisionScoreSnapshotRepository(lease.Context)),
-            new InitiativeProgressCalculator());
+            new InitiativeProgressCalculator(),
+            new TestRagThresholdService());
     }
 
     private static FiscalYear CreateYear(TestDbContextLease lease)

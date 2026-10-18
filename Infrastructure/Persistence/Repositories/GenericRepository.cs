@@ -59,6 +59,10 @@ namespace Infrastructure.Persistence.Repositories
             context.Set<T>().Update(entity);
             await context.SaveChangesAsync();
         }
+        public async Task UpdateWithoutSave(T entity)
+        {
+            context.Set<T>().Update(entity);
+        }
         public async Task UpdateRange(IEnumerable<T> entities)
         {
             context.Set<T>().UpdateRange(entities);

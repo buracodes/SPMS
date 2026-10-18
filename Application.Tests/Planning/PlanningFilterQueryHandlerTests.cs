@@ -133,8 +133,11 @@ public class PlanningFilterQueryHandlerTests
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var plan = await SeedAsync(lease);
-        // A KPI attached straight to a scorecard has no KRA and therefore no goal name.
-        lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Standalone KPI"));
+        // A KPI whose parent KRA has been soft-deleted (the runtime "hierarchy
+        // incomplete" state) resolves no KRA and therefore no goal name.
+        lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Standalone KPI", plan.KraA.Id));
+        var parentKra = await lease.Context.Kras.FindAsync(plan.KraA.Id);
+        parentKra!.IsDeleted = true;
         await lease.Context.SaveChangesAsync();
 
         var response = await KpiHandler(lease).Handle(new GetAllKpiQueryRequest(), CancellationToken.None);
@@ -152,7 +155,7 @@ public class PlanningFilterQueryHandlerTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var plan = await SeedAsync(lease);
         lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "In 2025", plan.KraA.Id));
-        lease.Context.Kpis.Add(Kpi(plan.Corporate2026, "In 2026"));
+        lease.Context.Kpis.Add(Kpi(plan.Corporate2026, "In 2026", plan.KraA.Id));
         await lease.Context.SaveChangesAsync();
 
         var response = await KpiHandler(lease)
@@ -170,7 +173,7 @@ public class PlanningFilterQueryHandlerTests
         var plan = await SeedAsync(lease);
         lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Under goal A", plan.KraA.Id));
         lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Under goal B", plan.KraB.Id));
-        lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "No KRA at all"));
+        lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Under goal A also", plan.KraA.Id));
         await lease.Context.SaveChangesAsync();
 
         var response = await KpiHandler(lease)
@@ -187,7 +190,7 @@ public class PlanningFilterQueryHandlerTests
         var plan = await SeedAsync(lease);
         lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Target row", plan.KraA.Id));
         lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Other goal", plan.KraB.Id));
-        lease.Context.Kpis.Add(Kpi(plan.Corporate2026, "Other year"));
+        lease.Context.Kpis.Add(Kpi(plan.Corporate2026, "Other year", plan.KraA.Id));
         await lease.Context.SaveChangesAsync();
 
         var response = await KpiHandler(lease).Handle(

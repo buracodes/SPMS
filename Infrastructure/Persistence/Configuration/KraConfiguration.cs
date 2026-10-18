@@ -32,5 +32,9 @@ public class KraConfiguration : IEntityTypeConfiguration<Kra>
 
         builder.HasIndex(k => new { k.ScorecardId, k.GoalId, k.Name }).IsUnique().HasFilter("[IsDeleted] = 0");
         builder.HasIndex(k => k.StrategicThemeId);
+
+        // Same periodicity guard as CK_Goals_Weight_Range: the CAST keeps the predicate
+        // meaningful on SQLite (which stores decimal as TEXT) while staying valid on SQL Server.
+        builder.ToTable(tb => tb.HasCheckConstraint("CK_Kras_Weight_Range", "CAST([Weight] AS REAL) > 0.0 AND CAST([Weight] AS REAL) <= 100.0"));
     }
 }

@@ -14,19 +14,29 @@ public sealed class InitiativeDtoFactory
 {
     private readonly IInitiativeProgressCalculator progressCalculator;
     private readonly IInitiativeBudgetCalculator budgetCalculator;
+    private readonly Application.Interface.IService.IRagThresholdService ragThresholdService;
 
     public InitiativeDtoFactory(
         IInitiativeProgressCalculator progressCalculator,
-        IInitiativeBudgetCalculator budgetCalculator)
+        IInitiativeBudgetCalculator budgetCalculator,
+        Application.Interface.IService.IRagThresholdService ragThresholdService)
     {
         this.progressCalculator = progressCalculator;
         this.budgetCalculator = budgetCalculator;
+        this.ragThresholdService = ragThresholdService;
     }
 
-    public InitiativeDto BuildDetail(Domain.Entities.Initiative initiative)
+    /// <summary>Effective RAG thresholds (FR-607) loaded once per factory instance (one per request).</summary>
+    private RagThresholds? thresholds;
+
+    private async Task<RagThresholds> ThresholdsAsync(CancellationToken cancellationToken)
+        => thresholds ??= await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken);
+
+    public async Task<InitiativeDto> BuildDetailAsync(Domain.Entities.Initiative initiative, CancellationToken cancellationToken = default)
     {
         var progress = progressCalculator.Calculate(ToProgressInputs(initiative.Milestones));
         var contributionByMilestone = progress.Contributions.ToDictionary(c => c.MilestoneId);
+        var effectiveThresholds = await ThresholdsAsync(cancellationToken);
 
         return new InitiativeDto
         {
@@ -57,7 +67,7 @@ public sealed class InitiativeDtoFactory
             ProgressPercentage = progress.ProgressPercentage,
             IsReadyForCompletion = IsReadyFor(progress),
             NotReadyReason = ReadinessBlock(progress),
-            ProgressRagStatus = RagFor(progress),
+            ProgressRagStatus = RagFor(progress, effectiveThresholds),
             TotalMilestoneWeight = progress.TotalWeight,
             MilestoneWeightsAreValid = progress.WeightsAreValid,
             BudgetPosition = BuildBudget(initiative.Budget, initiative.ActualExpenditure),
@@ -82,10 +92,11 @@ public sealed class InitiativeDtoFactory
     /// Compact projection used by create/update responses, where the milestone graph has just
     /// been written and the calculated figures are still wanted by the client.
     /// </summary>
-    public InitiativeDto BuildSummary(Domain.Entities.Initiative initiative, IEnumerable<Milestone>? milestones = null)
+    public async Task<InitiativeDto> BuildSummaryAsync(Domain.Entities.Initiative initiative, IEnumerable<Milestone>? milestones = null, CancellationToken cancellationToken = default)
     {
         var set = (milestones ?? initiative.Milestones ?? Array.Empty<Milestone>()).ToList();
         var progress = progressCalculator.Calculate(ToProgressInputs(set));
+        var effectiveThresholds = await ThresholdsAsync(cancellationToken);
 
         return new InitiativeDto
         {
@@ -112,7 +123,7 @@ public sealed class InitiativeDtoFactory
             ProgressPercentage = progress.ProgressPercentage,
             IsReadyForCompletion = IsReadyFor(progress),
             NotReadyReason = ReadinessBlock(progress),
-            ProgressRagStatus = RagFor(progress),
+            ProgressRagStatus = RagFor(progress, effectiveThresholds),
             TotalMilestoneWeight = progress.TotalWeight,
             MilestoneWeightsAreValid = progress.WeightsAreValid,
             BudgetPosition = BuildBudget(initiative.Budget, initiative.ActualExpenditure),
@@ -135,12 +146,14 @@ public sealed class InitiativeDtoFactory
 
     /// <summary>
     /// FRD RAG banding for the calculated progress figure. Delegates to <see cref="DashboardRag"/> so
-    /// the thresholds (Green &gt;= 95%, Amber 70-94.9%, Red &lt; 70%) are defined once for the
-    /// initiative pages, the dashboards and the reports. An initiative with no milestones has no
-    /// meaningful progress, so it reports <see cref="DashboardRag.NoData"/> rather than 0% Red.
+    /// the configured thresholds (Green &gt;= 95%, Amber 70-94.9%, Red &lt; 70% by default) are applied
+    /// everywhere the progress figure is shown. An initiative with no milestones has no meaningful
+    /// progress, so it reports <see cref="DashboardRag.NoData"/> ("no score") rather than 0% Red.
     /// </summary>
-    private static string RagFor(InitiativeProgressResult progress) =>
-        progress.HasMilestones ? DashboardRag.FromScore(progress.ProgressPercentage) : DashboardRag.NoData;
+    private static string RagFor(InitiativeProgressResult progress, RagThresholds thresholds) =>
+        progress.HasMilestones
+            ? DashboardRag.FromScore(progress.ProgressPercentage, thresholds)
+            : DashboardRag.NoData;
 
     public MilestoneDto BuildMilestone(Milestone milestone, IReadOnlyDictionary<Guid, MilestoneContribution>? contributions = null)
     {

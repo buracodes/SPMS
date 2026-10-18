@@ -15,6 +15,11 @@ public class CreateKpiValidator : AbstractValidator<CreateKpiCommandRequest>
             .MaximumLength(200).WithMessage("KPI name must be 200 characters or fewer.");
 
         RuleFor(x => x.Weight)
-            .InclusiveBetween(0m, 100m).WithMessage("KPI weight must be between 0 and 100.");
+            .GreaterThan(0m).WithMessage("KPI weight must be greater than 0%.")
+            .LessThanOrEqualTo(100m).WithMessage("KPI weight cannot exceed 100%.");
+
+        RuleFor(x => x)
+            .Must(x => x.KraId.HasValue ^ x.DivisionGoalId.HasValue)
+            .WithMessage("A KPI must belong to exactly one parent: a KRA or a division goal, not both or neither.");
     }
 }

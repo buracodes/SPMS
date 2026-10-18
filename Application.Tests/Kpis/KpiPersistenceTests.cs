@@ -145,14 +145,20 @@ public class KpiPersistenceTests
 
         var scorecard1 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Scorecard A", Scope = ScorecardScope.Corporate };
         var scorecard2 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Scorecard B", Scope = ScorecardScope.Division };
+        var goal1 = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard1.Id, Name = "Goal A", Weight = 100 };
+        var goal2 = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard2.Id, Name = "Goal B", Weight = 100 };
+        var kra1 = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard1.Id, GoalId = goal1.Id, Name = "KRA A", Weight = 100 };
+        var kra2 = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard2.Id, GoalId = goal2.Id, Name = "KRA B", Weight = 100 };
 
         lease.Context.FiscalYears.Add(fiscalYear);
         lease.Context.Scorecards.AddRange(scorecard1, scorecard2);
+        lease.Context.Goals.AddRange(goal1, goal2);
+        lease.Context.Kras.AddRange(kra1, kra2);
         await lease.Context.SaveChangesAsync();
 
         lease.Context.Kpis.AddRange(
-            NewKpi(scorecard1.Id, "Revenue Growth"),
-            NewKpi(scorecard2.Id, "Revenue Growth"));
+            NewKpiUnderKra(scorecard1.Id, kra1.Id, "Revenue Growth"),
+            NewKpiUnderKra(scorecard2.Id, kra2.Id, "Revenue Growth"));
 
         await lease.Context.SaveChangesAsync();
 
@@ -224,20 +230,6 @@ public class KpiPersistenceTests
         Assert.Equal(2, parent.ChildKpis.Count);
         Assert.Contains(parent.ChildKpis, c => c.Name == "Revenue Division A");
         Assert.Contains(parent.ChildKpis, c => c.Name == "Revenue Division B");
-    }
-
-    private static Kpi NewKpi(Guid scorecardId, string name)
-    {
-        return new Kpi
-        {
-            Id = Guid.NewGuid(),
-            ScorecardId = scorecardId,
-            Name = name,
-            Unit = "%",
-            Weight = 50,
-            DataSource = KpiDataSource.Manual,
-            KpiType = KpiType.Lagging
-        };
     }
 
     private static Kpi NewKpiUnderKra(Guid scorecardId, Guid kraId, string name)

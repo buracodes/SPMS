@@ -154,14 +154,183 @@ public class FiscalYearLifecycleGuardTests
     }
 
     [Fact]
-    public async Task Update_Dates_RejectsWhenPeriodCalendarExists()
+    public async Task Update_Dates_AllowsWhenPeriodsExistButNoScorecardsOrValues()
+    {
+        // Periods alone no longer freeze the calendar: a correction is allowed as long as no
+        // scorecard, target or actual value depends on them (they are safely regenerated).
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, withPeriods: true);
+        var guard = CreateGuard(lease);
+
+        await guard.EnsureCanUpdateAsync(
+            year,
+            new UpdateFiscalYearDto { StartDate = new DateTime(2099, 9, 1) },
+            BusinessDateBeforeEnd);
+    }
+
+    [Fact]
+    public async Task Update_Dates_RejectsWhenScorecardExists()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, withPeriods: true);
+        lease.Context.Scorecards.Add(new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "Scorecard 2099",
+            Scope = ScorecardScope.Corporate
+        });
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<FiscalYearMutationException>(() =>
+            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { StartDate = new DateTime(2099, 9, 1) }, BusinessDateBeforeEnd));
+    }
+
+    [Fact]
+    public async Task Update_Dates_RejectsWhenTargetsExist()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, withPeriods: true);
+        var scorecard = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "Scorecard 2099",
+            Scope = ScorecardScope.Corporate
+        };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Goal", Weight = 100 };
+        var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "KRA", Weight = 100 };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            KraId = kra.Id,
+            Name = "KPI",
+            Unit = "%",
+            Weight = 100,
+            DataSource = KpiDataSource.Manual,
+            KpiType = KpiType.Lagging
+        };
+        var period = year.Periods.First();
+        var target = new KpiTarget
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = period.Id,
+            TargetValue = 100,
+            Granularity = TargetGranularity.Annual
+        };
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Kras.Add(kra);
+        lease.Context.Kpis.Add(kpi);
+        lease.Context.KpiTargets.Add(target);
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<FiscalYearMutationException>(() =>
+            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { StartDate = new DateTime(2099, 9, 1) }, BusinessDateBeforeEnd));
+    }
+
+    [Fact]
+    public async Task Update_Dates_RejectsWhenActualsExist()
+    {
+        // Any actual value recorded against a period depends on that period's calendar, so a
+        // calendar change must be rejected (defensive counterpart to the target gate).
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, withPeriods: true);
+        var scorecard = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "Scorecard 2099",
+            Scope = ScorecardScope.Corporate
+        };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Goal", Weight = 100 };
+        var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "KRA", Weight = 100 };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            KraId = kra.Id,
+            Name = "KPI",
+            Unit = "%",
+            Weight = 100,
+            DataSource = KpiDataSource.Manual,
+            KpiType = KpiType.Lagging
+        };
+        var period = year.Periods.First();
+        var actual = new KpiActualValue
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = period.Id,
+            Value = 42,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = DateTime.UtcNow
+        };
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Kras.Add(kra);
+        lease.Context.Kpis.Add(kpi);
+        lease.Context.KpiActualValues.Add(actual);
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<FiscalYearMutationException>(() =>
+            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { StartDate = new DateTime(2099, 9, 1) }, BusinessDateBeforeEnd));
+    }
+
+    [Fact]
+    public async Task Update_Dates_RejectsStartThatIsNotFirstOfMonth()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = await SeedYearAsync(lease, withPeriods: true);
         var guard = CreateGuard(lease);
 
-        await Assert.ThrowsAsync<FiscalYearMutationException>(() =>
-            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { StartDate = new DateTime(2099, 7, 2) }, BusinessDateBeforeEnd));
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { StartDate = new DateTime(2099, 9, 15) }, BusinessDateBeforeEnd));
+    }
+
+    [Fact]
+    public async Task Update_Dates_RejectsOverlappingCalendar()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease); // 2099-07-01 .. 2100-06-30
+        var neighbour = new FiscalCalendarService().CreateFiscalYear(2098); // 2098-07-01 .. 2099-06-30
+        lease.Context.FiscalYears.Add(neighbour);
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        // Moving the 2099 year back to June makes its span overlap the 2098 year.
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { StartDate = new DateTime(2099, 6, 1) }, BusinessDateBeforeEnd));
+    }
+
+    [Fact]
+    public async Task Update_Dates_AllowsUnchangedStart_EvenWhenScorecardsExist()
+    {
+        // Re-submitting the same start date is not a calendar change, so it is not blocked by the
+        // scorecard gate (a label-only edit must still succeed).
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, withPeriods: true);
+        lease.Context.Scorecards.Add(new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "Scorecard 2099",
+            Scope = ScorecardScope.Corporate
+        });
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        await guard.EnsureCanUpdateAsync(
+            year,
+            new UpdateFiscalYearDto { StartDate = year.StartDate },
+            BusinessDateBeforeEnd);
     }
 
     [Fact]
@@ -172,6 +341,66 @@ public class FiscalYearLifecycleGuardTests
         var guard = CreateGuard(lease);
 
         await guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { Label = "Renamed" }, BusinessDateBeforeEnd);
+    }
+
+    [Fact]
+    public async Task Update_Label_Allows_WhenScorecardsExist()
+    {
+        // Confirmed rule: a year carrying scorecards cannot have its DATES edited, but it may still
+        // be relabelled because a label has no dependent periods, targets or snapshots.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, withPeriods: true);
+        lease.Context.Scorecards.Add(new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "Scorecard 2099",
+            Scope = ScorecardScope.Corporate
+        });
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        await guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { Label = "Renamed 2099" }, BusinessDateBeforeEnd);
+    }
+
+    [Fact]
+    public async Task Update_RejectsBlankLabel()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto { Label = "   " }, BusinessDateBeforeEnd));
+    }
+
+    [Fact]
+    public async Task Update_NullLabel_LeavesLabelUnchanged()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var guard = CreateGuard(lease);
+
+        await guard.EnsureCanUpdateAsync(year, new UpdateFiscalYearDto(), BusinessDateBeforeEnd);
+
+        Assert.Equal("2099/00", year.Label);
+    }
+
+    [Fact]
+    public async Task Update_RejectsDuplicateLabel_IgnoringCase()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var calendar = new FiscalCalendarService();
+        var first = calendar.CreateFiscalYear(2099);
+        first.Label = "FY2099";
+        var second = calendar.CreateFiscalYear(2100);
+        second.Label = "FY2100";
+        lease.Context.FiscalYears.AddRange(first, second);
+        await lease.Context.SaveChangesAsync();
+        var guard = CreateGuard(lease);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            guard.EnsureCanUpdateAsync(second, new UpdateFiscalYearDto { Label = "fy2099" }, BusinessDateBeforeEnd));
     }
 
     [Fact]

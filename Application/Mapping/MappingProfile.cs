@@ -17,7 +17,13 @@ namespace Application.Mapping
             CreateMap<CommonEntity, CommonEntityDto>().ReverseMap();
             CreateMap<Goal, GetAllGoalDto>().ReverseMap();
             CreateMap<Goal, CreateGoalDto>().ReverseMap();
-            CreateMap<FiscalYear, FiscalYearDto>().ReverseMap();
+            // CommonEntity.Status (the soft-delete row state, EntityStatus.Active) wins
+            // AutoMapper's exact-name match and would mask the lifecycle status with
+            // "Active"; the lifecycle status must come from FiscalYearStatus so
+            // Open/Closed/Archived reach the API and the UI's FR-703 edit gating.
+            CreateMap<FiscalYear, FiscalYearDto>()
+                .ForMember(d => d.Status, o => o.MapFrom(s => s.FiscalYearStatus.ToString()))
+                .ReverseMap();
         }
     }
 }

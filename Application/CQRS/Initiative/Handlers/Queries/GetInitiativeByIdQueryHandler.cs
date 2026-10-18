@@ -30,7 +30,7 @@ public class GetInitiativeByIdQueryHandler : IRequestHandler<GetInitiativeByIdQu
         {
             Success = true,
             Message = "Initiative retrieved successfully.",
-            Data = dtoFactory.BuildDetail(initiative)
+            Data = await dtoFactory.BuildDetailAsync(initiative, cancellationToken)
         };
     }
 }

@@ -142,7 +142,7 @@ namespace Application.CQRS.PeriodLock.Handlers.Commands
                 await periodLockConfigRepository.Update(config);
             }
 
-            var status = await lockStatusService.GetStatusAsync(scorecard.Id, period, now);
+            var status = await lockStatusService.GetStatusAsync(scorecard.Id, period);
 
             return new Response<PeriodLockStatusItemDto>
             {

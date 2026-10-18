@@ -14,5 +14,13 @@ public interface IKpiActualValueRepository : IGenericRepository<KpiActualValue>
 
     Task<IReadOnlyList<KpiActualValue>> GetByKpiAndPeriodAsync(Guid kpiId, Guid fiscalPeriodId);
 
+    /// <summary>
+    /// FR-309 day-dedupe: deactivates (never deletes) every automated actual row of one
+    /// KPI + fiscal period recorded on the same UTC day, so the latest same-day write
+    /// survives. Staged only - the caller commits with SaveChanges together with the new
+    /// write it is about to add.
+    /// </summary>
+    Task SoftDeleteAutomatedSameDayAsync(Guid kpiId, Guid fiscalPeriodId, DateTime utcDay);
+
     Task<bool> AnyForPeriodsAsync(IEnumerable<Guid> fiscalPeriodIds, CancellationToken cancellationToken = default);
 }

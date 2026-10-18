@@ -17,15 +17,18 @@ public class GetAllInitiativeQueryHandler : IRequestHandler<GetAllInitiativeQuer
     private readonly IInitiativeRepository initiativeRepository;
     private readonly IInitiativeProgressCalculator progressCalculator;
     private readonly IInitiativeBudgetCalculator budgetCalculator;
+    private readonly Application.Interface.IService.IRagThresholdService ragThresholdService;
 
     public GetAllInitiativeQueryHandler(
         IInitiativeRepository _initiativeRepository,
         IInitiativeProgressCalculator _progressCalculator,
-        IInitiativeBudgetCalculator _budgetCalculator)
+        IInitiativeBudgetCalculator _budgetCalculator,
+        Application.Interface.IService.IRagThresholdService _ragThresholdService)
     {
         initiativeRepository = _initiativeRepository;
         progressCalculator = _progressCalculator;
         budgetCalculator = _budgetCalculator;
+        ragThresholdService = _ragThresholdService;
     }
 
     public async Task<PagedInitiativeDto> Handle(GetAllInitiativeQuery request, CancellationToken cancellationToken)
@@ -46,6 +49,8 @@ public class GetAllInitiativeQueryHandler : IRequestHandler<GetAllInitiativeQuer
         var initiativeIds = page.Items.Select(i => i.Id).ToList();
         var inputs = await initiativeRepository.GetProgressInputsAsync(initiativeIds, cancellationToken);
         var today = DateTime.UtcNow.Date;
+        // FR-607: load the effective thresholds once so every row in the page uses the same bands.
+        var thresholds = await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken);
 
         var items = page.Items.Select(row =>
         {
@@ -82,7 +87,7 @@ public class GetAllInitiativeQueryHandler : IRequestHandler<GetAllInitiativeQuer
                     IsOverBudget = budget.IsOverBudget
                 },
                 IsOverdue = IsOverdue(row.Status, row.EndDate, today),
-                ProgressRagStatus = RagFor(progress)
+                ProgressRagStatus = RagFor(progress, thresholds)
             };
         }).ToList();
 
@@ -97,10 +102,13 @@ public class GetAllInitiativeQueryHandler : IRequestHandler<GetAllInitiativeQuer
 
     /// <summary>
     /// FRD RAG banding for the calculated progress figure, mirroring <see cref="InitiativeDtoFactory"/>.
-    /// An initiative with no milestones has no meaningful progress and reports NoData rather than 0% Red.
+    /// An initiative with no milestones has no meaningful progress and reports Gray ("no score")
+    /// rather than 0% Red.
     /// </summary>
-    internal static string RagFor(InitiativeProgressResult progress) =>
-        progress.HasMilestones ? DashboardRag.FromScore(progress.ProgressPercentage) : DashboardRag.NoData;
+    internal static string RagFor(InitiativeProgressResult progress, RagThresholds? thresholds = null) =>
+        progress.HasMilestones
+            ? DashboardRag.FromScore(progress.ProgressPercentage, thresholds)
+            : DashboardRag.NoData;
 
     internal static bool IsOverdue(Domain.Enums.InitiativeStatus status, DateTime? endDate, DateTime today)
     {

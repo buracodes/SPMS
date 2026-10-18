@@ -29,9 +29,10 @@ public class InitiativeCommandHandlerTests
         new UserRepository(lease.Context),
         user);
 
-    private static InitiativeDtoFactory BuildFactory() => new(
+    private static InitiativeDtoFactory BuildFactory(TestRagThresholdService? thresholds = null) => new(
         new InitiativeProgressCalculator(),
-        new InitiativeBudgetCalculator());
+        new InitiativeBudgetCalculator(),
+        thresholds ?? new TestRagThresholdService());
 
     private static async Task<User> SeedUserAsync(TestDbContextLease lease, string fullName)
     {
@@ -2207,12 +2208,12 @@ var a = Guid.NewGuid();
     [InlineData(70, DashboardRag.Amber)]
     [InlineData(69, DashboardRag.Red)]
     [InlineData(0, DashboardRag.Red)]
-    public void BuildSummary_BandsProgressUsingTheFrdThresholds(int completion, string expected)
+    public async Task BuildSummary_BandsProgressUsingTheFrdThresholds(int completion, string expected)
     {
         var initiative = NewInitiative();
         var milestone = NewMilestone(initiative.Id, 100m, completion);
 
-        var dto = BuildFactory().BuildSummary(initiative, new[] { milestone });
+        var dto = await BuildFactory().BuildSummaryAsync(initiative, new[] { milestone });
 
         Assert.Equal(completion, dto.ProgressPercentage);
         Assert.Equal(expected, dto.ProgressRagStatus);
@@ -2223,13 +2224,32 @@ var a = Guid.NewGuid();
     /// of being banded red for a progress figure that was never really calculated.
     /// </summary>
     [Fact]
-    public void BuildSummary_ReportsNoRagBandWhenTheInitiativeHasNoMilestones()
+    public async Task BuildSummary_ReportsNoRagBandWhenTheInitiativeHasNoMilestones()
     {
         var initiative = NewInitiative();
 
-        var dto = BuildFactory().BuildSummary(initiative, Array.Empty<Milestone>());
+        var dto = await BuildFactory().BuildSummaryAsync(initiative, Array.Empty<Milestone>());
 
         Assert.Equal(DashboardRag.NoData, dto.ProgressRagStatus);
+    }
+
+    /// <summary>
+    /// FR-607: stored thresholds must move the bands. 60% is Amber under the FR-607 defaults,
+    /// but turns Green once an administrator relaxes the Green threshold to 80%.
+    /// </summary>
+    [Fact]
+    public async Task BuildSummary_BandsProgressWithConfiguredThresholds()
+    {
+        var thresholds = new TestRagThresholdService
+        {
+            Current = new RagThresholds { Green = 60m, Yellow = 40m }
+        };
+        var initiative = NewInitiative();
+        var milestone = NewMilestone(initiative.Id, 100m, 65);
+
+        var dto = await BuildFactory(thresholds).BuildSummaryAsync(initiative, new[] { milestone });
+
+        Assert.Equal(DashboardRag.Green, dto.ProgressRagStatus);
     }
 
     private static Initiative NewInitiative() => new()
@@ -2503,7 +2523,7 @@ Assert.True(response.Success);
         Assert.NotEqual(InitiativeStatus.Completed, stored.Status);
 
         var detail = await new InitiativeRepository(lease.Context).GetDetailAsync(initiative.Id);
-        var projected = BuildFactory().BuildDetail(detail!);
+        var projected = await BuildFactory().BuildDetailAsync(detail!);
         Assert.True(projected.IsReadyForCompletion);
         Assert.Null(projected.NotReadyReason);
     }
@@ -2572,7 +2592,7 @@ Assert.True(response.Success);
         Assert.Equal(InitiativeStatus.NotStarted, stored.Status);
 
         var detail = await new InitiativeRepository(lease.Context).GetDetailAsync(initiative.Id);
-        Assert.True(BuildFactory().BuildDetail(detail!).IsReadyForCompletion);
+        Assert.True((await BuildFactory().BuildDetailAsync(detail!)).IsReadyForCompletion);
     }
 
     [Fact]

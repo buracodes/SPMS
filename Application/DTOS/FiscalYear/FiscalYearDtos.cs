@@ -7,6 +7,12 @@ public class FiscalYearDto
     public DateTime StartDate { get; set; }
     public DateTime EndDate { get; set; }
     public string Status { get; set; } = string.Empty;
+
+    /// <summary>
+    /// True when at least one scorecard was built on this year. Once that happens the year's
+    /// dates become read-only (the backend enforces it; the UI uses this to hide the affordance).
+    /// </summary>
+    public bool HasScorecards { get; set; }
 }
 
 public class CreateFiscalYearDto
@@ -27,6 +33,11 @@ public class CreateFiscalYearDto
 public class UpdateFiscalYearDto
 {
     public string? Label { get; set; }
+
+    /// <summary>
+    /// Optional new start date (the first day of a month). The end date is never accepted from
+    /// the client: the server always derives it as the last day of the twelfth month, so the
+    /// twelve-month span can never drift or be edited independently.
+    /// </summary>
     public DateTime? StartDate { get; set; }
-    public DateTime? EndDate { get; set; }
 }

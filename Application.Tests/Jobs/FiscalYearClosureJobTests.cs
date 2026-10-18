@@ -65,25 +65,54 @@ public class FiscalYearClosureJobTests
     }
 
     [Fact]
-    public async Task ClosesYear_WhenBusinessDatePasses_EvenIfUtcDateHasNot()
+    public async Task ClosesYear_WhenGracePeriodExpires_EvenIfUtcDateHasNot()
     {
-        // Timezone boundary (FR-703): the year ends 2026-06-30. At 22:00 UTC on that same
-        // day it is already 01:00 on 2026-07-01 in East Africa Time, so in business time
-        // the end date has passed even though the UTC calendar date has not.
+        // Timezone boundary (FR-703): the year 2025/26 ends 2026-06-30, so its final-month
+        // grace deadline is 2026-07-07 and regular entry is blocked from 2026-07-08. At
+        // 22:00 UTC on 2026-07-08 it is already 01:00 on 2026-07-09 in East Africa Time,
+        // so in business time the grace has expired even though the UTC calendar date
+        // would only expire it later that day.
         await using var lease = await TestDbContextFactory.CreateAsync();
         var completedYear = NewFiscalYear(2025);
         lease.Context.FiscalYears.Add(completedYear);
         lease.Context.Scorecards.Add(NewScorecard(completedYear.Id, "Corporate 2025"));
         await lease.Context.SaveChangesAsync();
 
-        var clock = TestBusinessClock.On(new DateTime(2026, 6, 30, 22, 0, 0, DateTimeKind.Utc));
+        var clock = TestBusinessClock.On(new DateTime(2026, 7, 8, 22, 0, 0, DateTimeKind.Utc));
         await new FiscalYearClosureJob(
             CreateScopeFactory(lease),
             NullLogger<FiscalYearClosureJob>.Instance,
             clock).ExecuteAsync();
 
         var year = await lease.Context.FiscalYears.AsNoTracking().SingleAsync(y => y.Id == completedYear.Id);
+        var scorecard = await lease.Context.Scorecards.AsNoTracking().SingleAsync(s => s.FiscalYearId == completedYear.Id);
         Assert.Equal(FiscalYearStatus.Closed, year.FiscalYearStatus);
+        Assert.Equal(ScorecardStatus.Closed, scorecard.ScorecardStatus);
+    }
+
+    [Fact]
+    public async Task DoesNotCloseYear_DuringFinalMonthGracePeriod()
+    {
+        // Confirmed business rule (final-month grace): the year — and its scorecards —
+        // stay writable until the end date plus seven calendar days (2026-07-07), so the
+        // closure job must not close anything on 2026-07-05 even though the end date has
+        // already passed.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var completedYear = NewFiscalYear(2025);
+        lease.Context.FiscalYears.Add(completedYear);
+        lease.Context.Scorecards.Add(NewScorecard(completedYear.Id, "Corporate 2025"));
+        await lease.Context.SaveChangesAsync();
+
+        var clock = TestBusinessClock.On(new DateTime(2026, 7, 5, 10, 0, 0, DateTimeKind.Utc));
+        await new FiscalYearClosureJob(
+            CreateScopeFactory(lease),
+            NullLogger<FiscalYearClosureJob>.Instance,
+            clock).ExecuteAsync();
+
+        var year = await lease.Context.FiscalYears.AsNoTracking().SingleAsync(y => y.Id == completedYear.Id);
+        var scorecard = await lease.Context.Scorecards.AsNoTracking().SingleAsync(s => s.FiscalYearId == completedYear.Id);
+        Assert.Equal(FiscalYearStatus.Open, year.FiscalYearStatus);
+        Assert.Equal(ScorecardStatus.Active, scorecard.ScorecardStatus);
     }
 
     [Fact]

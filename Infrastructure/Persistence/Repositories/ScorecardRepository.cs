@@ -36,4 +36,14 @@ public class ScorecardRepository : GenericRepository<Scorecard>, IScorecardRepos
         return await context.Scorecards
             .AnyAsync(s => s.FiscalYearId == fiscalYearId, cancellationToken);
     }
+
+    public async Task<IReadOnlySet<Guid>> GetFiscalYearIdsWithScorecardsAsync(CancellationToken cancellationToken = default)
+    {
+        var ids = await context.Scorecards
+            .Select(s => s.FiscalYearId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return ids.ToHashSet();
+    }
 }

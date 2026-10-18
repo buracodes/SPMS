@@ -110,7 +110,8 @@ public class DivisionPlanMutationHandlerTests
             new GoalRepository(lease.Context),
             CreatePeriodService(lease),
             new FiscalPeriodRepository(lease.Context),
-            new KpiTargetRepository(lease.Context));
+            new KpiTargetRepository(lease.Context),
+            new TestRagThresholdService());
 
     private static DivisionPeriodCalculationService CreatePeriodService(TestDbContextLease lease)
         => new(
@@ -121,7 +122,8 @@ public class DivisionPlanMutationHandlerTests
             new KpiActualValueRepository(lease.Context),
             new KpiScoreCalculator(new ScoreStrategyFactory()),
             new GoalScoreCalculator(),
-            new ScorecardScoreCalculator());
+            new ScorecardScoreCalculator(),
+            TestBusinessClock.Real());
 
     // FR-904: builds a cumulative target set that satisfies the reconciliation rules.
     private static async Task<List<DivisionKpiTargetInputDto>> BuildReconciledTargetsAsync(
@@ -445,7 +447,12 @@ public class DivisionPlanMutationHandlerTests
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateFixture(lease);
-        var standalone = new Kpi { Id = Guid.NewGuid(), ScorecardId = fixture.ScorecardId, Name = "Standalone", Weight = 10 };
+        // A KPI not belonging to a division goal is a corporate KPI sitting under a KRA.
+        var corporateGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = fixture.ScorecardId, Name = "Plan Integrity Goal", Weight = 50 };
+        var corporateKra = new Kra { Id = Guid.NewGuid(), ScorecardId = fixture.ScorecardId, GoalId = corporateGoal.Id, Name = "Plan Integrity KRA", Weight = 50 };
+        var standalone = new Kpi { Id = Guid.NewGuid(), ScorecardId = fixture.ScorecardId, KraId = corporateKra.Id, Name = "Standalone", Weight = 10 };
+        lease.Context.Goals.Add(corporateGoal);
+        lease.Context.Kras.Add(corporateKra);
         lease.Context.Kpis.Add(standalone);
         await lease.Context.SaveChangesAsync();
 

@@ -2,6 +2,7 @@ using Application.CQRS.KpiActuals.Requests.Queries;
 using Application.DTOS.KpiActual;
 using Application.Exceptions;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using Domain.Entities;
 using MediatR;
@@ -13,15 +14,18 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
         private readonly IKpiRepository kpiRepository;
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiActualValueRepository kpiActualValueRepository;
+        private readonly ICurrentUserService currentUserService;
 
         public GetActualValueHistoryQueryHandler(
             IKpiRepository _kpiRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
-            IKpiActualValueRepository _kpiActualValueRepository)
+            IKpiActualValueRepository _kpiActualValueRepository,
+            ICurrentUserService _currentUserService)
         {
             kpiRepository = _kpiRepository;
             fiscalPeriodRepository = _fiscalPeriodRepository;
             kpiActualValueRepository = _kpiActualValueRepository;
+            currentUserService = _currentUserService;
         }
 
         public async Task<Response<ActualValueHistoryDto>> Handle(GetActualValueHistoryQueryRequest request, CancellationToken cancellationToken)
@@ -31,6 +35,8 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             {
                 throw new NotFoundException(nameof(Kpi), request.KpiId);
             }
+
+            KpiActualReadGuard.EnsureReadAllowed(kpi, currentUserService);
 
             var period = await fiscalPeriodRepository.GetById(request.FiscalPeriodId);
             if (period == null)

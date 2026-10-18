@@ -31,7 +31,7 @@ public class GetAllInitiativeDto
     /// <summary>Backend-calculated weighted progress (FR-403).</summary>
     public decimal ProgressPercentage { get; set; }
 
-    /// <summary>FRD RAG band for the calculated progress figure (Green >= 95%, Amber 70-94.9%, Red < 70%).</summary>
+    /// <summary>FRD RAG band for the calculated progress figure (Green >= 95%, Amber 70-94.9%, Red < 70%), "NoData" when unmeasured.</summary>
     public string ProgressRagStatus { get; set; } = Application.Dashboard.DashboardRag.NoData;
 
     /// <summary>Sum of recorded milestone weights; 100 means properly configured (FR-402).</summary>

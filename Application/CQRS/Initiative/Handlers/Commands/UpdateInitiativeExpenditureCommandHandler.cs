@@ -68,7 +68,7 @@ public class UpdateInitiativeExpenditureCommandHandler
             {
                 Success = true,
                 Message = "Actual expenditure is unchanged.",
-                Data = dtoFactory.BuildSummary(initiative, unchanged)
+                Data = await dtoFactory.BuildSummaryAsync(initiative, unchanged, cancellationToken)
             };
         }
 
@@ -97,7 +97,7 @@ public class UpdateInitiativeExpenditureCommandHandler
         {
             Success = true,
             Message = "Actual expenditure updated successfully.",
-            Data = dtoFactory.BuildSummary(initiative, milestones)
+            Data = await dtoFactory.BuildSummaryAsync(initiative, milestones, cancellationToken)
         };
     }
 }

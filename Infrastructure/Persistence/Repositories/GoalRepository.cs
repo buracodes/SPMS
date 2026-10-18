@@ -33,4 +33,26 @@ public class GoalRepository : GenericRepository<Goal>, IGoalRepository
             .Select(g => g.Id)
             .ToListAsync();
     }
+
+    public async Task<decimal> GetWeightsSumAsync(Guid scorecardId, Guid? excludeGoalId = null, CancellationToken cancellationToken = default)
+    {
+        // The global !IsDeleted query filter keeps soft-deleted rows out of the budget,
+        // matching every other weight-budget guard (milestones, division goals).
+        var query = context.Goals.Where(g => g.ScorecardId == scorecardId);
+        if (excludeGoalId.HasValue)
+        {
+            query = query.Where(g => g.Id != excludeGoalId.Value);
+        }
+
+        return await query.SumAsync(g => g.Weight, cancellationToken);
+    }
+
+    public async Task<bool> HasAnyKrasIncludingDeletedAsync(Guid goalId, CancellationToken cancellationToken = default)
+    {
+        // IgnoreQueryFilters deliberately: deletion-integrity must also detect
+        // soft-deleted KRAs that normal reads (and the Kras navigation) hide.
+        return await context.Kras
+            .IgnoreQueryFilters()
+            .AnyAsync(k => k.GoalId == goalId, cancellationToken);
+    }
 }

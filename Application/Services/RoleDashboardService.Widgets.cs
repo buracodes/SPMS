@@ -157,7 +157,7 @@ public sealed partial class RoleDashboardService
     private async Task<StatCardWidgetDto> BuildSummaryAsync(DashboardLoad load, CancellationToken cancellationToken)
     {
         var score = OverallScore(load);
-        var rag = DashboardRag.FromScore(score);
+        var rag = load.Rag(score);
         var goalsWithScore = load.Goals.Count(g => GoalScore(load, g.Id).HasValue);
         var kpisWithData = load.Kpis.Count(k => KpiPeriod(load, k.Id)?.PeriodScore.HasValue == true);
         var currentMonth = load.CurrentFiscalMonth;
@@ -173,7 +173,7 @@ public sealed partial class RoleDashboardService
                     : Percent(score),
                 Unit = "%",
                 RagLabel = load.Profile.DataScope == DashboardDataScope.AssignedOnly
-                    ? DashboardRag.FromScore(AverageScore(load))
+                    ? load.Rag(AverageScore(load))
                     : rag,
                 Detail = load.FiscalYear is null
                     ? null
@@ -197,7 +197,7 @@ public sealed partial class RoleDashboardService
             {
                 Key = "goals",
                 Label = "Goals on track",
-                Value = load.Goals.Count(g => DashboardRag.FromScore(GoalScore(load, g.Id)) == DashboardRag.Green)
+                Value = load.Goals.Count(g => load.Rag(GoalScore(load, g.Id)) == DashboardRag.Green)
                     .ToString(CultureInfo.InvariantCulture),
                 Detail = $"{goalsWithScore} of {load.Goals.Count} scored"
             });
@@ -206,7 +206,7 @@ public sealed partial class RoleDashboardService
             {
                 Key = "kpis",
                 Label = "KPIs on track",
-                Value = load.Kpis.Count(k => DashboardRag.FromScore(KpiPeriod(load, k.Id)?.PeriodScore) == DashboardRag.Green)
+                Value = load.Kpis.Count(k => load.Rag(KpiPeriod(load, k.Id)?.PeriodScore) == DashboardRag.Green)
                     .ToString(CultureInfo.InvariantCulture),
                 Detail = $"{kpisWithData} of {load.Kpis.Count} with data"
             });
@@ -296,14 +296,14 @@ public sealed partial class RoleDashboardService
             Description = "Weighted score produced by the SPMS calculation engine.",
             Value = score,
             Unit = "%",
-            RagLabel = DashboardRag.FromScore(score),
-            Caption = score.HasValue ? DashboardRag.FromScore(score) switch
+            RagLabel = load.Rag(score),
+            Caption = score.HasValue ? load.Rag(score) switch
             {
                 DashboardRag.Green => "On track",
                 DashboardRag.Amber => "At risk",
                 DashboardRag.Red => "Off track",
-                _ => "No data yet"
-            } : "No data yet",
+                _ => "No score yet"
+            } : "No score yet",
             Footnote = load.Profile.DataScope == DashboardDataScope.AssignedOnly
                 ? "Average of the KPIs assigned to you."
                 : load.SelectedScorecard?.Name
@@ -319,7 +319,7 @@ public sealed partial class RoleDashboardService
 
         foreach (var kpi in load.Kpis)
         {
-            switch (DashboardRag.FromScore(KpiPeriod(load, kpi.Id)?.PeriodScore))
+            switch (load.Rag(KpiPeriod(load, kpi.Id)?.PeriodScore))
             {
                 case DashboardRag.Green: green++; break;
                 case DashboardRag.Amber: amber++; break;
@@ -331,7 +331,7 @@ public sealed partial class RoleDashboardService
         return new RagDistributionWidgetDto
         {
             Title = "KPI RAG distribution",
-            Description = "On track, at risk, off track and KPIs still without data.",
+            Description = "Green, Amber, Red and KPIs still without a score.",
             Green = green,
             Amber = amber,
             Red = red,
@@ -426,7 +426,7 @@ public sealed partial class RoleDashboardService
             };
         }
 
-        var now = load.NowUtc.Date;
+        var now = load.BusinessDate.Date;
         var actual = Math.Round(active.Average(i => (decimal)InitiativeProgress(i)), 1);
 
         var plannedValues = new List<decimal?>();
@@ -502,7 +502,7 @@ public sealed partial class RoleDashboardService
                 ("goals", result?.Goals.Count ?? 0),
                 ("avgGoal", goalScores.Count == 0 ? "-" : Math.Round(goalScores.Average(), 1).ToString("0.0", CultureInfo.InvariantCulture)),
                 ("score", Percent(score)),
-                ("rag", DashboardRag.FromScore(score)),
+                ("rag", load.Rag(score)),
                 ("trend", Signed(entity is null ? null : TrendOf(entity.MonthlyScores)))
             ));
         }
@@ -566,7 +566,7 @@ public sealed partial class RoleDashboardService
                 ("initiatives", initiatives.Count),
                 ("openIssues", openIssues),
                 ("score", Percent(score)),
-                ("rag", DashboardRag.FromScore(score))
+                ("rag", load.Rag(score))
             ));
         }
 
@@ -633,7 +633,7 @@ public sealed partial class RoleDashboardService
                     ("kpis", x.KpiCount),
                     ("kpisWithData", x.KpiWithData),
                     ("score", Percent(x.Score)),
-                    ("rag", DashboardRag.FromScore(x.Score))
+                    ("rag", load.Rag(x.Score))
                 };
 
                 if (drillDown)
@@ -716,7 +716,7 @@ public sealed partial class RoleDashboardService
                         Target = period?.PeriodTarget,
                         Actual = period?.PeriodActual,
                         Score = period?.PeriodScore,
-                        RagLabel = DashboardRag.FromScore(period?.PeriodScore),
+                        RagLabel = load.Rag(period?.PeriodScore),
                         KpiType = (int)kpi.KpiType,
                         HasData = period?.PeriodActual.HasValue == true,
                         Note = month > 0 ? NoteFor(load, kpi.Id, month) : null
@@ -731,7 +731,7 @@ public sealed partial class RoleDashboardService
                 Name = kra.Name,
                 Weight = kra.Weight,
                 Score = kraScore,
-                RagLabel = DashboardRag.FromScore(kraScore),
+                RagLabel = load.Rag(kraScore),
                 KpiCount = kpiDtos.Count,
                 KpiWithDataCount = kpiDtos.Count(k => k.HasData),
                 Trend = krasTrend,
@@ -745,7 +745,7 @@ public sealed partial class RoleDashboardService
             GoalName = goal.Name,
             Weight = goal.Weight,
             Score = score,
-            RagLabel = DashboardRag.FromScore(score),
+            RagLabel = load.Rag(score),
             Trend = trend,
             Kras = kras
         };
@@ -802,14 +802,14 @@ public sealed partial class RoleDashboardService
             ("target", period.PeriodTarget),
             ("actual", period.PeriodActual),
             ("score", Percent(period.PeriodScore)),
-            ("rag", DashboardRag.FromScore(period.PeriodScore)));
+            ("rag", load.Rag(period.PeriodScore)));
 
     private TableWidgetDto BuildKpiExceptions(DashboardLoad load)
     {
         var rows = load.Kpis
             .Select(kpi => (Kpi: kpi, Period: KpiPeriod(load, kpi.Id)))
             .Where(x => x.Period is not null
-                        && (x.Period.PeriodScore is null || DashboardRag.IsRed(x.Period.PeriodScore)))
+                        && (x.Period.PeriodScore is null || load.RagIsRed(x.Period.PeriodScore)))
             .OrderBy(x => x.Period!.PeriodScore ?? decimal.MaxValue)
             .Take(ExceptionKpiCount)
             .Select(x => KpiRow(load, x.Kpi, x.Period!, "Exception"))
@@ -864,7 +864,7 @@ public sealed partial class RoleDashboardService
                         ("weight", kpi.Weight.ToString("0.##", CultureInfo.InvariantCulture)),
                         ("kpiType", kpi.KpiType == KpiType.Lagging ? "Lagging" : "Leading"),
                         ("score", Percent(period?.PeriodScore)),
-                        ("rag", DashboardRag.FromScore(period?.PeriodScore))
+                        ("rag", load.Rag(period?.PeriodScore))
                     ));
                 }
             }
@@ -1091,7 +1091,7 @@ public sealed partial class RoleDashboardService
                     ("kpis", (object?)d.Kpis),
                     ("kpisWithData", (object?)d.KpisWithData),
                     ("score", (object?)Percent(d.Score)),
-                    ("rag", DashboardRag.FromScore(d.Score))))
+                    ("rag", load.Rag(d.Score))))
                 .ToList(),
             EmptyMessage = "No division plans exist for this scorecard."
         };
@@ -1139,7 +1139,7 @@ public sealed partial class RoleDashboardService
                     ("target", period?.PeriodTarget),
                     ("actual", period?.PeriodActual),
                     ("score", Percent(period?.PeriodScore)),
-                    ("rag", DashboardRag.FromScore(period?.PeriodScore)),
+                    ("rag", load.Rag(period?.PeriodScore)),
                     ("entryStatus", entryStatus),
                     ("periodState", LockStateText(lockState)),
                     ("note", note ?? "-")
@@ -1209,7 +1209,7 @@ public sealed partial class RoleDashboardService
             var overdue = lockInfo is not null
                 && lockInfo.State == PeriodLockState.Open
                 && cutoff.HasValue
-                && cutoff.Value.Date <= load.NowUtc.Date
+                && cutoff.Value.Date <= load.BusinessDate.Date
                 && missing > 0;
 
             rows.Add(Row(
@@ -1453,7 +1453,7 @@ public sealed partial class RoleDashboardService
 
                 foreach (var month in months)
                 {
-                    if (period.MonthlyScores.TryGetValue(month, out var score) && DashboardRag.IsRed(score))
+                    if (period.MonthlyScores.TryGetValue(month, out var score) && load.RagIsRed(score))
                     {
                         streak++;
                     }
@@ -1470,7 +1470,7 @@ public sealed partial class RoleDashboardService
                         Key = $"kpi-red-{kpi.Id}",
                         Severity = "danger",
                         Title = $"{kpi.Name} off track for {streak} consecutive months",
-                        Description = $"Monthly score stayed below {DashboardRag.AmberThreshold:F0}% for {streak} months in a row.",
+                        Description = $"Monthly score stayed below {load.Thresholds.Yellow:F0}% for {streak} months in a row.",
                         Route = "/kpis"
                     });
                 }
@@ -1482,7 +1482,7 @@ public sealed partial class RoleDashboardService
         {
             var open = initiative.Status is InitiativeStatus.NotStarted or InitiativeStatus.InProgress;
 
-            if (open && initiative.EndDate.Date < load.NowUtc.Date)
+            if (open && initiative.EndDate.Date < load.BusinessDate.Date)
             {
                 alerts.Add(new AlertDto
                 {
@@ -1502,7 +1502,7 @@ public sealed partial class RoleDashboardService
                 }
 
                 var dueDate = milestone.DueDate;
-                var days = (dueDate.Date - load.NowUtc.Date).Days;
+                var days = (dueDate.Date - load.BusinessDate.Date).Days;
                 if (days < 0)
                 {
                     alerts.Add(new AlertDto
@@ -1632,7 +1632,7 @@ public sealed partial class RoleDashboardService
                 continue;
             }
 
-            if (lockInfo.EffectiveCutoffDate != default && lockInfo.EffectiveCutoffDate.Date > load.NowUtc.Date)
+            if (lockInfo.EffectiveCutoffDate != default && lockInfo.EffectiveCutoffDate.Date > load.BusinessDate.Date)
             {
                 continue;
             }

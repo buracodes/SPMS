@@ -27,39 +27,48 @@ public class UpdateGoalCommandHandler : IRequestHandler<UpdateGoalCommandRequest
         var goal = await goalRepository.GetById(request.Id)
             ?? throw new NotFoundException(nameof(Domain.Entities.Goal), request.Id);
 
-        if (!string.IsNullOrWhiteSpace(request.Name))
+        // Weight/name edits go through a single serializable transaction (ADR-009): the
+        // budget re-read (excluding this goal) and the save happen together, so two
+        // concurrent edits cannot both pass the 100% check, and a lost-update against a
+        // stale RowVersion rolls back instead of landing half-applied.
+        await unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            var updatedName = request.Name.Trim();
-            var duplicates = (await goalRepository.GetByScorecardAsync(goal.ScorecardId))
-                .Where(g => !g.IsDeleted && g.Id != goal.Id
-                    && string.Equals(g.Name, updatedName, StringComparison.OrdinalIgnoreCase));
-            if (duplicates.Any())
-                throw new BadRequestException($"A goal named '{updatedName}' already exists under this scorecard.");
-            goal.Name = updatedName;
-        }
-
-        if (request.Description != null)
-            goal.Description = request.Description;
-
-        if (request.Weight.HasValue)
-        {
-            // Validate total weight doesn't exceed 100% (excluding this goal)
-            var existingGoals = await goalRepository.GetByScorecardAsync(goal.ScorecardId);
-            var otherGoalsWeight = existingGoals.Where(g => g.Id != goal.Id).Sum(g => g.Weight);
-            var newWeight = request.Weight.Value;
-
-            if (otherGoalsWeight + newWeight > 100m)
+            if (!string.IsNullOrWhiteSpace(request.Name))
             {
-                throw new BadRequestException($"Updating this goal would bring the total goal weight to {otherGoalsWeight + newWeight:F2}% which exceeds 100%. Adjust the weight or existing goals.");
+                var updatedName = request.Name.Trim();
+                var duplicates = (await goalRepository.GetByScorecardAsync(goal.ScorecardId))
+                    .Where(g => !g.IsDeleted && g.Id != goal.Id
+                        && string.Equals(g.Name, updatedName, StringComparison.OrdinalIgnoreCase));
+                if (duplicates.Any())
+                    throw new BadRequestException($"A goal named '{updatedName}' already exists under this scorecard.");
+                goal.Name = updatedName;
             }
 
-            goal.Weight = newWeight;
-        }
+            if (request.Description != null)
+                goal.Description = request.Description;
 
-        if (request.IsActive.HasValue)
-            goal.IsActive = request.IsActive.Value;
+            if (request.Weight.HasValue)
+            {
+                // FR-302: the stored weight of every OTHER goal is read fresh in SQL inside
+                // this transaction. Assigned weights are never rewritten here - only this
+                // goal's own weight moves.
+                var otherGoalsWeight = await goalRepository.GetWeightsSumAsync(goal.ScorecardId, goal.Id, cancellationToken: cancellationToken);
+                var newWeight = request.Weight.Value;
 
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+                if (otherGoalsWeight + newWeight > 100m)
+                {
+                    throw new BadRequestException($"Updating this goal would bring the total goal weight to {otherGoalsWeight + newWeight:F2}% which exceeds 100%. Adjust the weight or existing goals.");
+                }
+
+                goal.Weight = newWeight;
+            }
+
+            if (request.IsActive.HasValue)
+                goal.IsActive = request.IsActive.Value;
+
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return goal;
+        });
 
         return new Response<GoalDto>
         {

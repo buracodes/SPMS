@@ -68,8 +68,8 @@ public class InitiativeDto
     public string? NotReadyReason { get; set; }
 
     /// <summary>
-    /// FR-607 RAG band for <see cref="ProgressPercentage"/>, so the client paints the same colour the
-    /// dashboards and reports use. "NoData" when the initiative has no milestones to weigh.
+    /// Text RAG label ("Green" | "Yellow" | "Red") banding the calculated progress, matching the
+    /// wire tokens dashboards and reports use. "Gray" when the initiative has no milestones to weigh.
     /// </summary>
     public string ProgressRagStatus { get; set; } = Application.Dashboard.DashboardRag.NoData;
 

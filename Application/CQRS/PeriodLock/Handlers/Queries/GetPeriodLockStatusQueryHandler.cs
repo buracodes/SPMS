@@ -50,13 +50,12 @@ namespace Application.CQRS.PeriodLock.Handlers.Queries
 
             var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(request.FiscalYearId);
             var fiscalYear = await fiscalYearRepository.GetById(request.FiscalYearId);
-            
-            // Generate periods if they don't exist (same as SetKpiTargets handler)
-            if (periods.Count != 12 && fiscalYear != null)
+
+            // A GET must be side-effect free: if the year has no twelve-month calendar, fail
+            // with 400 instead of silently generating (and persisting) the periods.
+            if (fiscalYear is null || periods.Count != 12)
             {
-                var generated = fiscalCalendarService.GeneratePeriods(fiscalYear);
-                await fiscalPeriodRepository.AddRange(generated);
-                periods = generated;
+                throw new BadRequestException("The fiscal year has no period calendar. Create the fiscal year periods before retrieving lock status.");
             }
 
             var configs = await periodLockConfigRepository.GetForScorecardFiscalYearAsync(request.ScorecardId, request.FiscalYearId);

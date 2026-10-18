@@ -101,7 +101,8 @@ public class DivisionHandlerTests
             new GoalRepository(lease.Context),
             CreatePeriodService(lease),
             new FiscalPeriodRepository(lease.Context),
-            new KpiTargetRepository(lease.Context));
+            new KpiTargetRepository(lease.Context),
+            new TestRagThresholdService());
 
     private static DivisionPeriodCalculationService CreatePeriodService(TestDbContextLease lease)
         => new(
@@ -112,7 +113,8 @@ public class DivisionHandlerTests
             new KpiActualValueRepository(lease.Context),
             new KpiScoreCalculator(new ScoreStrategyFactory()),
             new GoalScoreCalculator(),
-            new ScorecardScoreCalculator());
+            new ScorecardScoreCalculator(),
+            TestBusinessClock.Real());
 
     // FR-904: builds a cumulative target set that satisfies the reconciliation rules
     // (monthly values sum to the quarterly target, quarterly targets sum to the annual target).

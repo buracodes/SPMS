@@ -20,6 +20,7 @@ namespace Application.CQRS.Division.Handlers.Queries
         private readonly IDivisionPeriodCalculationService divisionPeriodCalculationService;
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiTargetRepository kpiTargetRepository;
+        private readonly IRagThresholdService ragThresholdService;
 
         public GetDivisionPlanContextQueryHandler(
             IScorecardRepository _scorecardRepository,
@@ -28,7 +29,8 @@ namespace Application.CQRS.Division.Handlers.Queries
             IGoalRepository _goalRepository,
             IDivisionPeriodCalculationService _divisionPeriodCalculationService,
             IFiscalPeriodRepository _fiscalPeriodRepository,
-            IKpiTargetRepository _kpiTargetRepository)
+            IKpiTargetRepository _kpiTargetRepository,
+            IRagThresholdService _ragThresholdService)
         {
             scorecardRepository = _scorecardRepository;
             divisionRepository = _divisionRepository;
@@ -37,6 +39,7 @@ namespace Application.CQRS.Division.Handlers.Queries
             divisionPeriodCalculationService = _divisionPeriodCalculationService;
             fiscalPeriodRepository = _fiscalPeriodRepository;
             kpiTargetRepository = _kpiTargetRepository;
+            ragThresholdService = _ragThresholdService;
         }
 
         public async Task<Response<DivisionPlanDto>> Handle(
@@ -121,8 +124,9 @@ namespace Application.CQRS.Division.Handlers.Queries
                 .GroupBy(t => t.KpiId)
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<KpiTarget>)g.ToList());
 
+            var thresholds = await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken);
             var data = DivisionPlanDtoFactory.Build(
-                plan, scorecard, corporateGoals, performance, corporateScorecard, kpiTargets, fiscalPeriods);
+                plan, scorecard, corporateGoals, performance, corporateScorecard, kpiTargets, fiscalPeriods, thresholds);
             data.DivisionName = plan.Division?.Name ?? data.DivisionName;
 
             return new Response<DivisionPlanDto>

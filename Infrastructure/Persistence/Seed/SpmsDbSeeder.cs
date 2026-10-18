@@ -1,6 +1,7 @@
 using Application.Interface.IService;
 using Domain.Constants;
 using Domain.Entities;
+using Domain.Enums;
 using Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -23,6 +24,7 @@ namespace Infrastructure.Persistence.Seed
             await SeedRoleUsersAsync(context, passwordHasher);
             await SeedOrganizationProfileAsync(context);
             await SeedDivisionAccountsAsync(context, passwordHasher);
+            await SeedRagThresholdsAsync(context);
         }
 
         private static async Task SeedPermissionsAsync(SpmsDbContext context)
@@ -340,5 +342,60 @@ namespace Infrastructure.Persistence.Seed
                 Permissions.OrganizationView
             }
         };
+
+        /// <summary>
+        /// FR-607 default RAG thresholds (Green >= 95%, Yellow 70-94%, Red &lt; 70%). Seeded once so the
+        /// administrator screen starts from the FRD bands instead of an empty configuration; the rows
+        /// can then be changed through PUT /api/RagThreshold.
+        /// </summary>
+        private static async Task SeedRagThresholdsAsync(SpmsDbContext context)
+        {
+            var scopeKey = RagThresholdDefaults.ScopeKey;
+            var alreadySeeded = await context.RagThresholdConfigs.AnyAsync(x => x.ScopeKey == scopeKey);
+            if (alreadySeeded)
+            {
+                return;
+            }
+
+            context.RagThresholdConfigs.AddRange(
+                new RagThresholdConfig
+                {
+                    Id = Guid.NewGuid(),
+                    ScopeKey = scopeKey,
+                    Band = RagBand.Green,
+                    MinScore = RagThresholdDefaults.GreenThreshold,
+                    MaxScore = null,
+                    Color = RagThresholdDefaults.GreenColor
+                },
+                new RagThresholdConfig
+                {
+                    Id = Guid.NewGuid(),
+                    ScopeKey = scopeKey,
+                    Band = RagBand.Yellow,
+                    MinScore = RagThresholdDefaults.YellowThreshold,
+                    MaxScore = RagThresholdDefaults.GreenThreshold,
+                    Color = RagThresholdDefaults.YellowColor
+                },
+                new RagThresholdConfig
+                {
+                    Id = Guid.NewGuid(),
+                    ScopeKey = scopeKey,
+                    Band = RagBand.Red,
+                    MinScore = null,
+                    MaxScore = RagThresholdDefaults.YellowThreshold,
+                    Color = RagThresholdDefaults.RedColor
+                },
+                new RagThresholdConfig
+                {
+                    Id = Guid.NewGuid(),
+                    ScopeKey = scopeKey,
+                    Band = RagBand.Gray,
+                    MinScore = null,
+                    MaxScore = null,
+                    Color = RagThresholdDefaults.GrayColor
+                });
+
+            await context.SaveChangesAsync();
+        }
     }
 }

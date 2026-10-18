@@ -10,6 +10,7 @@ using Application.Tests.TestSupport;
 using Application.Validation.KpiTarget;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
@@ -34,6 +35,7 @@ public class KpiTargetHandlerTests
             Name = "Revenue Growth",
             Unit = "%",
             Weight = 100,
+            IsCumulative = true,
             DataSource = KpiDataSource.Manual,
             KpiType = KpiType.Lagging
         };
@@ -57,18 +59,35 @@ public class KpiTargetHandlerTests
             new FiscalPeriodRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
             calendar ?? new FiscalCalendarService(),
-            new TestSpmsJobScheduler());
+            new TestSpmsJobScheduler(),
+            new SpmsUnitOfWork(lease.Context));
     }
 
     private static SetKpiTargetsDto CreateDto(Guid kpiId, Guid fiscalYearId, bool includeQuarterly = true)
     {
+        // Reconciled cumulative dataset: months 1..12 sum to 78 and the quarterly
+        // sums (6, 15, 24, 33) add up to the annual target.
         return new SetKpiTargetsDto
         {
             KpiId = kpiId,
             FiscalYearId = fiscalYearId,
             MonthlyTargets = Enumerable.Range(1, 12).Select(m => (decimal)m).ToList(),
-            QuarterlyTargets = includeQuarterly ? Enumerable.Range(1, 4).Select(q => (decimal)q * 3).ToList() : null,
-            AnnualTarget = 100
+            QuarterlyTargets = includeQuarterly ? new List<decimal> { 6, 15, 24, 33 } : null,
+            AnnualTarget = 78
+        };
+    }
+
+    private static SetKpiTargetsDto CreateDtoWithAnnual(Guid kpiId, Guid fiscalYearId, decimal annual)
+    {
+        // Flat reconciled dataset scaled to the annual target (the four quarters
+        // each take annual/4, the twelve months each take annual/12).
+        return new SetKpiTargetsDto
+        {
+            KpiId = kpiId,
+            FiscalYearId = fiscalYearId,
+            MonthlyTargets = Enumerable.Repeat(annual / 12m, 12).ToList(),
+            QuarterlyTargets = Enumerable.Repeat(annual / 4m, 4).ToList(),
+            AnnualTarget = annual
         };
     }
 
@@ -89,8 +108,8 @@ public class KpiTargetHandlerTests
         Assert.Equal(12, targets.Count(t => t.Granularity == TargetGranularity.Monthly));
         Assert.Equal(4, targets.Count(t => t.Granularity == TargetGranularity.Quarterly));
         Assert.Equal(1, targets.Count(t => t.Granularity == TargetGranularity.Annual));
-        Assert.Contains(targets, t => t.Granularity == TargetGranularity.Annual && t.TargetValue == 100);
-        Assert.Contains(targets, t => t.Granularity == TargetGranularity.Quarterly && t.TargetValue == 9); // Q3 = month 9
+        Assert.Contains(targets, t => t.Granularity == TargetGranularity.Annual && t.TargetValue == 78);
+        Assert.Contains(targets, t => t.Granularity == TargetGranularity.Quarterly && t.TargetValue == 24); // Q3 = months 7..9
     }
 
     [Fact]
@@ -102,8 +121,7 @@ public class KpiTargetHandlerTests
         var handler = CreateHandler(lease);
         await handler.Handle(new SetKpiTargetsCommandRequest { Dto = CreateDto(kpiId, fiscalYearId) }, CancellationToken.None);
 
-        var updated = CreateDto(kpiId, fiscalYearId);
-        updated.AnnualTarget = 250;
+        var updated = CreateDtoWithAnnual(kpiId, fiscalYearId, 250m);
         var response = await handler.Handle(new SetKpiTargetsCommandRequest { Dto = updated }, CancellationToken.None);
 
         var targets = await lease.Context.KpiTargets.ToListAsync();
@@ -126,10 +144,12 @@ public class KpiTargetHandlerTests
             .ToListAsync())
             .ToHashSet();
 
-        var updated = CreateDto(kpiId, fiscalYearId);
-        updated.AnnualTarget = 250;
-        updated.QuarterlyTargets![0] = 42;
-        updated.MonthlyTargets[0] = 55;
+        var updated = CreateDtoWithAnnual(kpiId, fiscalYearId, 1000m);
+        // Rebalance three months within Q1 (quarterly stays annual/4) and keep every
+        // quarter row, to prove the upsert edits existing rows without duplicating.
+        updated.MonthlyTargets[0] = 100m;
+        updated.MonthlyTargets[1] = 50m;
+        updated.MonthlyTargets[2] = 100m;
         await handler.Handle(new SetKpiTargetsCommandRequest { Dto = updated }, CancellationToken.None);
 
         var secondIds = (await lease.Context.KpiTargets
@@ -144,11 +164,11 @@ public class KpiTargetHandlerTests
 
         var annual = await lease.Context.KpiTargets
             .SingleAsync(t => t.KpiId == kpiId && t.Granularity == TargetGranularity.Annual);
-        Assert.Equal(250, annual.TargetValue);
+        Assert.Equal(1000, annual.TargetValue);
 
-        var q1 = await lease.Context.KpiTargets
-            .SingleAsync(t => t.KpiId == kpiId && t.Granularity == TargetGranularity.Quarterly && t.FiscalPeriod!.FiscalMonth == 3);
-        Assert.Equal(42, q1.TargetValue);
+        var m1 = await lease.Context.KpiTargets
+            .SingleAsync(t => t.KpiId == kpiId && t.Granularity == TargetGranularity.Monthly && t.FiscalPeriod!.FiscalMonth == 1);
+        Assert.Equal(100, m1.TargetValue);
     }
 
     [Fact]
@@ -216,7 +236,7 @@ public class KpiTargetHandlerTests
 
         Assert.True(response.Success);
         Assert.Equal(17, response.Data!.Targets.Count);
-        Assert.Contains(response.Data.Targets, t => t.Granularity == TargetGranularity.Annual && t.TargetValue == 100);
+        Assert.Contains(response.Data.Targets, t => t.Granularity == TargetGranularity.Annual && t.TargetValue == 78);
     }
 
     [Fact]

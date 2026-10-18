@@ -20,6 +20,15 @@ namespace Application.Interface.IRepository
 
         Task AddRange(IEnumerable<T> entities);
         Task Update(T entity);
+
+        /// <summary>
+        /// Stages an entity update and defers the commit to
+        /// <see cref="Application.Interface.IUnitOfWork.SaveChangesAsync"/>. Use this when the
+        /// update and other pending changes (for example replacing a fiscal year's monthly
+        /// periods) must commit in one transaction.
+        /// </summary>
+        Task UpdateWithoutSave(T entity);
+
         Task UpdateRange(IEnumerable<T> entities);
 
         /// <summary>

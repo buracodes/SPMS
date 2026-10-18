@@ -74,6 +74,10 @@ namespace Domain.Constants
         public const string AdminConfigManage = "admin:config.manage";
         public const string AdminAuditView = "admin:audit.view";
 
+        // FR-607: RAG thresholds are an administrator/Power User setting, so they get their own
+        // permission rather than reusing AdminConfigManage (which Power Users deliberately lack).
+        public const string AdminRagThresholdsManage = "admin:rag.thresholds.manage";
+
         public const string PermissionClaimType = "permission";
 
         public static readonly IReadOnlyList<PermissionDefinition> All = new[]
@@ -140,6 +144,7 @@ namespace Domain.Constants
             new PermissionDefinition(AdminRolesManage, "Admin", "Manage roles and permissions"),
             new PermissionDefinition(AdminConfigManage, "Admin", "Manage system configuration"),
             new PermissionDefinition(AdminAuditView, "Admin", "View audit logs"),
+            new PermissionDefinition(AdminRagThresholdsManage, "Admin", "Manage RAG status thresholds"),
         };
     }
 }

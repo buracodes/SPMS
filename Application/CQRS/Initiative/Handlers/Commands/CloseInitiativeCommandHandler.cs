@@ -143,7 +143,7 @@ public class CloseInitiativeCommandHandler : IRequestHandler<CloseInitiativeComm
         {
             Success = true,
             Message = "Initiative completed and closed successfully. It is now read-only for normal users.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 }
@@ -215,7 +215,7 @@ public class ReopenInitiativeCommandHandler : IRequestHandler<ReopenInitiativeCo
         {
             Success = true,
             Message = "Initiative reopened.",
-            Data = dtoFactory.BuildDetail(detail!)
+            Data = await dtoFactory.BuildDetailAsync(detail!, cancellationToken)
         };
     }
 }

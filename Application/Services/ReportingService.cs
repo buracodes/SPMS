@@ -15,9 +15,6 @@ namespace Application.Services;
 
 public sealed class ReportingService : IReportingService
 {
-    private const int GreenThreshold = 95;
-    private const int AmberThreshold = 70;
-
     private readonly IScorecardRepository scorecardRepository;
     private readonly IFiscalYearRepository fiscalYearRepository;
     private readonly IFiscalPeriodRepository fiscalPeriodRepository;
@@ -34,6 +31,10 @@ public sealed class ReportingService : IReportingService
     private readonly IDivisionRepository divisionRepository;
     private readonly IDivisionPlanRepository divisionPlanRepository;
     private readonly IDivisionReportService divisionReportService;
+    private readonly IRagThresholdService ragThresholdService;
+
+    /// <summary>Effective RAG thresholds (FR-607) for the report being generated.</summary>
+    private Application.Dashboard.RagThresholds thresholds = Application.Dashboard.RagThresholds.Default;
 
     static ReportingService()
     {
@@ -56,7 +57,8 @@ public sealed class ReportingService : IReportingService
         IDivisionRepository _divisionRepository,
         IDivisionPlanRepository _divisionPlanRepository,
         IDivisionReportService _divisionReportService,
-        IInitiativeProgressCalculator _initiativeProgressCalculator)
+        IInitiativeProgressCalculator _initiativeProgressCalculator,
+        IRagThresholdService _ragThresholdService)
     {
         scorecardRepository = _scorecardRepository;
         fiscalYearRepository = _fiscalYearRepository;
@@ -74,6 +76,7 @@ public sealed class ReportingService : IReportingService
         divisionRepository = _divisionRepository;
         divisionPlanRepository = _divisionPlanRepository;
         divisionReportService = _divisionReportService;
+        ragThresholdService = _ragThresholdService;
     }
 
     public IReadOnlyList<ReportTemplateDto> GetTemplates()
@@ -118,6 +121,9 @@ public sealed class ReportingService : IReportingService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(filter);
+
+        // FR-607: band the whole report with one set of thresholds, loaded once per generation.
+        thresholds = await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken);
 
         var fiscalYear = await ResolveFiscalYearAsync(filter);
         var envelope = new ReportEnvelopeDto
@@ -221,7 +227,7 @@ public sealed class ReportingService : IReportingService
             }
 
             envelope.Summary.Add("KPIs", kpiMeta.Count.ToString());
-            AddLatestRagCounts(envelope, index, months);
+            AddLatestRagCounts(envelope, index, months, thresholds);
         }
         else if (level == "kra")
         {
@@ -260,7 +266,7 @@ public sealed class ReportingService : IReportingService
             }
 
             envelope.Summary.Add("KRAs", kraMeta.Count.ToString());
-            AddLatestRagCounts(envelope, index, months);
+            AddLatestRagCounts(envelope, index, months, thresholds);
         }
         else if (level == "goal")
         {
@@ -699,8 +705,10 @@ var progressResult = initiativeProgressCalculator.Calculate(
                             var color = text switch
                             {
                                 "Green" => "#16A34A",
+                                "Yellow" => "#D97706",
                                 "Amber" => "#D97706",
                                 "Red" => "#DC2626",
+                                "Gray" => "#6B7280",
                                 _ => "#111827"
                             };
 
@@ -961,7 +969,8 @@ var progressResult = initiativeProgressCalculator.Calculate(
     }
 
     private static void AddLatestRagCounts<S>(
-        ReportEnvelopeDto envelope, Dictionary<Guid, Dictionary<int, S>> index, List<int> months)
+        ReportEnvelopeDto envelope, Dictionary<Guid, Dictionary<int, S>> index, List<int> months,
+        Application.Dashboard.RagThresholds thresholds)
         where S : IScoreSnapshot
     {
         if (months.Count == 0)
@@ -971,7 +980,7 @@ var progressResult = initiativeProgressCalculator.Calculate(
 
         var latestMonth = months.Max();
         int green = 0;
-        int amber = 0;
+        int yellow = 0;
         int red = 0;
         int none = 0;
 
@@ -983,32 +992,33 @@ var progressResult = initiativeProgressCalculator.Calculate(
                 continue;
             }
 
-            if (s >= GreenThreshold)
+            switch (thresholds.Classify(s))
             {
-                green++;
-            }
-            else if (s >= AmberThreshold)
-            {
-                amber++;
-            }
-            else
-            {
-                red++;
+                case Dashboard.DashboardRag.Green:
+                    green++;
+                    break;
+                case Dashboard.DashboardRag.Amber:
+                    yellow++;
+                    break;
+                default:
+                    red++;
+                    break;
             }
         }
 
-        if (green + amber + red > 0)
+        if (green + yellow + red > 0)
         {
             envelope.Summary["Green (M" + latestMonth + ")"] = green.ToString();
-            envelope.Summary["Amber (M" + latestMonth + ")"] = amber.ToString();
+            envelope.Summary["Amber (M" + latestMonth + ")"] = yellow.ToString();
             envelope.Summary["Red (M" + latestMonth + ")"] = red.ToString();
         }
     }
 
-    private static string? Rag(decimal? score)
+    private string? Rag(decimal? score)
     {
-        // Bands live in DashboardRag so the dashboard and the report engine never disagree.
-        return score is null ? null : Application.Dashboard.DashboardRag.FromScore(score);
+        // One authoritative band: configured thresholds loaded for this report, evaluated by
+        // DashboardRag, so the dashboard and the report engine can never disagree.
+        return score is null ? null : Application.Dashboard.DashboardRag.FromScore(score, thresholds);
     }
 
     private static string? Trend(decimal? previous, decimal? current)

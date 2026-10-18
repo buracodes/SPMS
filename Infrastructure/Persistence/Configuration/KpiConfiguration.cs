@@ -72,8 +72,17 @@ public class KpiConfiguration : IEntityTypeConfiguration<Kpi>
         builder.HasIndex(k => k.DivisionGoalId);
         builder.HasIndex(k => k.ParentKpiId);
 
-        builder.ToTable(k => k.HasCheckConstraint(
-            "CK_Kpis_KraOrDivisionGoal",
-            "([KraId] IS NULL OR [DivisionGoalId] IS NULL)"));
+        builder.ToTable(k =>
+        {
+            // Layered with the handler/validator rules: exactly one parent (a KRA or a
+            // division goal), and the weight must live in (0, 100] so a zero-weight KPI
+            // can never silently join or skew a roll-up.
+            k.HasCheckConstraint(
+                "CK_Kpis_KraOrDivisionGoal",
+                "([KraId] IS NOT NULL AND [DivisionGoalId] IS NULL) OR ([KraId] IS NULL AND [DivisionGoalId] IS NOT NULL)");
+            k.HasCheckConstraint(
+                "CK_Kpis_Weight_Range",
+                "CAST([Weight] AS REAL) > 0.0 AND CAST([Weight] AS REAL) <= 100.0");
+        });
     }
 }

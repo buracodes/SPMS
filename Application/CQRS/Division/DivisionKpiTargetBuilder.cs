@@ -103,58 +103,8 @@ public static class DivisionKpiTargetBuilder
         IReadOnlyDictionary<int, decimal> quarterlyByQuarter,
         decimal annual)
     {
-        if (isCumulative)
-        {
-            for (var quarter = 1; quarter <= 4; quarter++)
-            {
-                if (!quarterlyByQuarter.TryGetValue(quarter, out var quarterly))
-                {
-                    throw new BadRequestException("All four quarterly targets must be filled.");
-                }
-
-                decimal monthlySum = 0m;
-                for (var month = quarter * 3 - 2; month <= quarter * 3; month++)
-                {
-                    if (!monthlyByMonth.TryGetValue(month, out var monthly))
-                    {
-                        throw new BadRequestException("All monthly targets within each quarter must be filled.");
-                    }
-                    monthlySum += monthly;
-                }
-
-                if (Math.Abs(monthlySum - quarterly) >= Tolerance)
-                {
-                    throw new BadRequestException(
-                        $"The monthly targets for Q{quarter} total {monthlySum:0.##} but the quarterly target is {quarterly:0.##}. They must match.");
-                }
-            }
-
-            var quarterlySum = quarterlyByQuarter.Values.Sum();
-            if (Math.Abs(quarterlySum - annual) >= Tolerance)
-            {
-                throw new BadRequestException(
-                    $"The quarterly targets total {quarterlySum:0.##} but the annual target is {annual:0.##}. They must match.");
-            }
-        }
-        else
-        {
-            for (var quarter = 1; quarter <= 4; quarter++)
-            {
-                if (!quarterlyByQuarter.TryGetValue(quarter, out var quarterly) || Math.Abs(quarterly - annual) >= Tolerance)
-                {
-                    throw new BadRequestException(
-                        $"Each quarterly target must equal the annual target ({annual:0.##}) for a non-cumulative KPI.");
-                }
-            }
-
-            for (var month = 1; month <= 12; month++)
-            {
-                if (!monthlyByMonth.TryGetValue(month, out var monthly) || Math.Abs(monthly - annual) >= Tolerance)
-                {
-                    throw new BadRequestException(
-                        $"Each monthly target must equal the annual target ({annual:0.##}) for a non-cumulative KPI.");
-                }
-            }
-        }
+        // Division module defers to the shared FR-304 reconciler so the corporate
+        // target-configuration page and the division plan module enforce one rule set.
+        KpiTargets.KpiTargetReconciliation.Validate(isCumulative, monthlyByMonth, quarterlyByQuarter, annual);
     }
 }

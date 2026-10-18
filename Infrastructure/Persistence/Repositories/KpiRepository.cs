@@ -40,9 +40,34 @@ public class KpiRepository : GenericRepository<Kpi>, IKpiRepository
             .ToListAsync();
     }
 
-    public async Task<bool> ExistsUnderDivisionGoalAsync(Guid divisionGoalId, string name)
+    public async Task<bool> ExistsUnderDivisionGoalAsync(Guid divisionGoalId, string name, Guid? excludeKpiId = null)
     {
-        return await context.Kpis.AnyAsync(k => k.DivisionGoalId == divisionGoalId && k.Name == name);
+        var query = context.Kpis.Where(k => k.DivisionGoalId == divisionGoalId && k.Name == name);
+        if (excludeKpiId.HasValue)
+        {
+            query = query.Where(k => k.Id != excludeKpiId.Value);
+        }
+        return await query.AnyAsync();
+    }
+
+    public async Task<bool> ExistsUnderKraAsync(Guid kraId, string name, Guid? excludeKpiId = null)
+    {
+        var query = context.Kpis.Where(k => k.KraId == kraId && k.Name == name);
+        if (excludeKpiId.HasValue)
+        {
+            query = query.Where(k => k.Id != excludeKpiId.Value);
+        }
+        return await query.AnyAsync();
+    }
+
+    public async Task<decimal> GetKraKpiWeightsSumAsync(Guid kraId, Guid? excludeKpiId = null)
+    {
+        var query = context.Kpis.Where(k => k.KraId == kraId);
+        if (excludeKpiId.HasValue)
+        {
+            query = query.Where(k => k.Id != excludeKpiId.Value);
+        }
+        return await query.SumAsync(k => k.Weight);
     }
 
     public async Task<decimal> GetDivisionKpiWeightsSumAsync(Guid divisionGoalId, Guid? excludeKpiId = null)
@@ -53,6 +78,54 @@ public class KpiRepository : GenericRepository<Kpi>, IKpiRepository
             query = query.Where(k => k.Id != excludeKpiId.Value);
         }
         return await query.SumAsync(k => k.Weight);
+    }
+
+    public async Task<IReadOnlyList<Kpi>> GetSubtreeIncludingInactiveAsync(Guid rootKpiId)
+    {
+        var all = await context.Kpis
+            .IgnoreQueryFilters()
+            .ToListAsync();
+
+        var byParent = all
+            .Where(k => k.ParentKpiId.HasValue)
+            .GroupBy(k => k.ParentKpiId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var root = all.FirstOrDefault(k => k.Id == rootKpiId);
+        if (root == null)
+        {
+            return Array.Empty<Kpi>();
+        }
+
+        var subtree = new List<Kpi> { root };
+        var frontier = new Queue<Guid>();
+        frontier.Enqueue(rootKpiId);
+        while (frontier.Count > 0)
+        {
+            var current = frontier.Dequeue();
+            if (byParent.TryGetValue(current, out var children))
+            {
+                foreach (var child in children)
+                {
+                    subtree.Add(child);
+                    frontier.Enqueue(child.Id);
+                }
+            }
+        }
+
+        return subtree;
+    }
+
+    public async Task<bool> HasAnyActualDataAsync(IReadOnlyList<Guid> kpiIds)
+    {
+        if (kpiIds.Count == 0)
+        {
+            return false;
+        }
+
+        return await context.Set<KpiActualValue>()
+            .IgnoreQueryFilters()
+            .AnyAsync(v => kpiIds.Contains(v.KpiId));
     }
 
     public async Task<IReadOnlyDictionary<Guid, int>> GetDivisionKpiCountsByGoalAsync(IReadOnlyList<Guid> divisionGoalIds)

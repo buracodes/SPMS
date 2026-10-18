@@ -22,6 +22,7 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
     private readonly IKpiScoreCalculator kpiScoreCalculator;
     private readonly IGoalScoreCalculator goalScoreCalculator;
     private readonly IScorecardScoreCalculator scorecardScoreCalculator;
+    private readonly IBusinessClock businessClock;
 
     public DivisionPeriodCalculationService(
         IDivisionGoalRepository _divisionGoalRepository,
@@ -31,7 +32,8 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
         IKpiActualValueRepository _kpiActualValueRepository,
         IKpiScoreCalculator _kpiScoreCalculator,
         IGoalScoreCalculator _goalScoreCalculator,
-        IScorecardScoreCalculator _scorecardScoreCalculator)
+        IScorecardScoreCalculator _scorecardScoreCalculator,
+        IBusinessClock _businessClock)
     {
         divisionGoalRepository = _divisionGoalRepository;
         fiscalYearRepository = _fiscalYearRepository;
@@ -41,6 +43,7 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
         kpiScoreCalculator = _kpiScoreCalculator;
         goalScoreCalculator = _goalScoreCalculator;
         scorecardScoreCalculator = _scorecardScoreCalculator;
+        businessClock = _businessClock;
     }
 
     public async Task<DivisionPeriodResult> CalculateAsync(
@@ -60,7 +63,7 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
 
         var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(fiscalYearId);
         var periodByMonth = periods.ToDictionary(p => p.FiscalMonth, p => p.Id);
-        var currentFiscalMonth = ScorePeriodScopeResolver.GetCurrentFiscalMonth(fiscalYear);
+        var currentFiscalMonth = ScorePeriodScopeResolver.GetCurrentFiscalMonth(fiscalYear, businessClock.BusinessDate);
         var scope = ScorePeriodScopeResolver.Resolve(periodType, quarter, fromMonth, toMonth, currentFiscalMonth);
 
         var goals = await divisionGoalRepository.GetByPlanWithKpisAsync(divisionPlanId);
@@ -154,21 +157,6 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
         return result;
     }
 
-    private static decimal? SumByRange(IReadOnlyDictionary<int, decimal> map, int from, int to)
-    {
-        decimal sum = 0m;
-        bool any = false;
-        for (int m = from; m <= to; m++)
-        {
-            if (map.TryGetValue(m, out var v))
-            {
-                sum += v;
-                any = true;
-            }
-        }
-        return any ? sum : (decimal?)null;
-    }
-
     private KpiScorePeriod ComputeKpiPeriod(
         Kpi kpi,
         ScorePeriodScope scope,
@@ -219,17 +207,17 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
             monthlyActuals[m] = ma;
         }
 
-        decimal? periodActual = SumByRange(actualsByMonth, scope.FromMonth, scope.ToMonth);
+        decimal? periodActual = TimeAggregator.Aggregate(actualsByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative);
         decimal? periodTarget = scope.Granularity switch
         {
             SnapshotGranularity.Quarter when quarterlyTargetByQuarter.ContainsKey(scope.Quarter) =>
                 quarterlyTargetByQuarter[scope.Quarter],
             SnapshotGranularity.Quarter =>
-                SumByRange(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth),
+                TimeAggregator.Aggregate(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative),
             SnapshotGranularity.Year =>
-                annualTarget ?? SumByRange(monthlyTargetByMonth, 1, 12),
+                annualTarget ?? TimeAggregator.Aggregate(monthlyTargetByMonth, 1, 12, kpi.IsCumulative),
             _ =>
-                SumByRange(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth)
+                TimeAggregator.Aggregate(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative)
         };
 
         decimal? periodScore = null;

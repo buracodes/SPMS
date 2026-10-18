@@ -20,6 +20,7 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
     private readonly IKraScoreCalculator kraScoreCalculator;
     private readonly IGoalScoreCalculator goalScoreCalculator;
     private readonly IScorecardScoreCalculator scorecardScoreCalculator;
+    private readonly IBusinessClock businessClock;
 
     public ScorePeriodCalculationService(
         IScorecardRepository _scorecardRepository,
@@ -32,7 +33,8 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
         IKpiScoreCalculator _kpiScoreCalculator,
         IKraScoreCalculator _kraScoreCalculator,
         IGoalScoreCalculator _goalScoreCalculator,
-        IScorecardScoreCalculator _scorecardScoreCalculator)
+        IScorecardScoreCalculator _scorecardScoreCalculator,
+        IBusinessClock _businessClock)
     {
         scorecardRepository = _scorecardRepository;
         fiscalYearRepository = _fiscalYearRepository;
@@ -45,6 +47,7 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
         kraScoreCalculator = _kraScoreCalculator;
         goalScoreCalculator = _goalScoreCalculator;
         scorecardScoreCalculator = _scorecardScoreCalculator;
+        businessClock = _businessClock;
     }
 
     public async Task<ScorePeriodResult> CalculateAsync(
@@ -67,7 +70,7 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
 
         var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(fiscalYearId);
         var periodByMonth = periods.ToDictionary(p => p.FiscalMonth, p => p.Id);
-        var currentFiscalMonth = ScorePeriodScopeResolver.GetCurrentFiscalMonth(fiscalYear);
+        var currentFiscalMonth = ScorePeriodScopeResolver.GetCurrentFiscalMonth(fiscalYear, businessClock.BusinessDate);
         var scope = ScorePeriodScopeResolver.Resolve(periodType, quarter, fromMonth, toMonth, currentFiscalMonth);
 
         var goals = await goalRepository.GetByScorecardAsync(scorecardId);
@@ -129,21 +132,6 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
         return result;
     }
 
-    private static decimal? SumByRange(IReadOnlyDictionary<int, decimal> map, int from, int to)
-    {
-        decimal sum = 0m;
-        bool any = false;
-        for (int m = from; m <= to; m++)
-        {
-            if (map.TryGetValue(m, out var v))
-            {
-                sum += v;
-                any = true;
-            }
-        }
-        return any ? sum : (decimal?)null;
-    }
-
     private KpiScorePeriod ComputeKpiPeriod(
         Kpi kpi,
         ScorePeriodScope scope,
@@ -194,17 +182,17 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
             monthlyActuals[m] = ma;
         }
 
-        decimal? periodActual = SumByRange(actualsByMonth, scope.FromMonth, scope.ToMonth);
+        decimal? periodActual = TimeAggregator.Aggregate(actualsByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative);
         decimal? periodTarget = scope.Granularity switch
         {
             SnapshotGranularity.Quarter when quarterlyTargetByQuarter.ContainsKey(scope.Quarter) =>
                 quarterlyTargetByQuarter[scope.Quarter],
             SnapshotGranularity.Quarter =>
-                SumByRange(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth),
+                TimeAggregator.Aggregate(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative),
             SnapshotGranularity.Year =>
-                annualTarget ?? SumByRange(monthlyTargetByMonth, 1, 12),
+                annualTarget ?? TimeAggregator.Aggregate(monthlyTargetByMonth, 1, 12, kpi.IsCumulative),
             _ =>
-                SumByRange(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth)
+                TimeAggregator.Aggregate(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative)
         };
 
         decimal? periodScore = null;
@@ -316,7 +304,13 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
         ScorePeriodScope scope,
         IScorecardScoreCalculator scorecardCalculator)
     {
-        var periodContributions = goals.Select(g =>
+        // FR-604 roll-up: inactive goals are business-deactivated and excluded from the
+        // scorecard aggregate (score and normalization denominator) exactly as reporting
+        // does; their own period scores above remain viewable. Ensures formula-quality
+        // consistency with ScoreCalculationService (snapshot engine).
+        var scoringGoals = goals.Where(g => g.IsActive).ToList();
+
+        var periodContributions = scoringGoals.Select(g =>
         {
             goalScores.TryGetValue(g.Id, out var per);
             return new ScorecardScoreContribution(per?.PeriodScore, g.Weight);
@@ -327,7 +321,7 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
         var monthlyScores = new Dictionary<int, decimal?>();
         for (int m = scope.FromMonth; m <= scope.ToMonth; m++)
         {
-            var monthlyContributions = goals.Select(g =>
+            var monthlyContributions = scoringGoals.Select(g =>
             {
                 goalScores.TryGetValue(g.Id, out var per);
                 var ms = per != null && per.MonthlyScores.TryGetValue(m, out var val) ? val : (decimal?)null;

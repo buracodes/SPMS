@@ -252,6 +252,48 @@ public class CloneScorecardHandlerTests
     }
 
     [Fact]
+    public async Task CloneScorecard_PreservesNames_AndKeepsDistinctSiblings()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var calendar = new FiscalCalendarService();
+        var sourceYear = calendar.CreateFiscalYear(2025);
+        var targetYear = calendar.CreateFiscalYear(2026);
+        var sourcePeriods = calendar.GeneratePeriods(sourceYear);
+        var targetPeriods = calendar.GeneratePeriods(targetYear);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = sourceYear.Id, Name = "Punct Strategy", Scope = ScorecardScope.Corporate };
+
+        // Under the old normalization both names collapsed to "Grow Revenue", so the second
+        // goal was silently dropped. They are distinct rows and must both survive the clone
+        // with their original punctuation intact.
+        var goal1 = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 50 };
+        var goal2 = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue!", Weight = 50 };
+
+        lease.Context.FiscalYears.AddRange(sourceYear, targetYear);
+        lease.Context.FiscalPeriods.AddRange(sourcePeriods);
+        lease.Context.FiscalPeriods.AddRange(targetPeriods);
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.AddRange(goal1, goal2);
+        await lease.Context.SaveChangesAsync();
+
+        var (handler, _) = CreateHandler(lease);
+        var response = await handler.Handle(new CloneScorecardCommandRequest
+        {
+            SourceScorecardId = scorecard.Id,
+            TargetFiscalYearId = targetYear.Id,
+            NewName = "Punct Strategy 2026"
+        }, CancellationToken.None);
+
+        Assert.Equal(2, response.Data!.GoalCount);
+        var clonedNames = await lease.Context.Goals
+            .Where(g => g.ScorecardId == response.Data.TargetScorecardId)
+            .Select(g => g.Name)
+            .ToListAsync();
+        Assert.Contains("Grow Revenue", clonedNames);
+        Assert.Contains("Grow Revenue!", clonedNames);
+    }
+
+    [Fact]
     public void CloneScorecardValidator_RequiresSourceAndTarget()
     {
         var validator = new CloneScorecardValidator();
