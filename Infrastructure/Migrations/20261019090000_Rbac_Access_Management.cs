@@ -1,9 +1,12 @@
+using Infrastructure.Persistence.Context;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace Infrastructure.Migrations
 {
+    [DbContext(typeof(SpmsDbContext))]
     [Migration("20261019090000_Rbac_Access_Management")]
     public partial class Rbac_Access_Management : Migration
     {
@@ -59,11 +62,6 @@ namespace Infrastructure.Migrations
                 name: "IX_UserRights_PermissionId",
                 table: "UserRights",
                 column: "PermissionId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_UserRights_UserId",
-                table: "UserRights",
-                column: "UserId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_UserRights_UserId_PermissionId",

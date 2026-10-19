@@ -1,9 +1,12 @@
+using Infrastructure.Persistence.Context;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace Infrastructure.Migrations
 {
+    [DbContext(typeof(SpmsDbContext))]
     [Migration("20261018210000_Kpi_Weight_And_Parent_Checks")]
     public partial class Kpi_Weight_And_Parent_Checks : Migration
     {
