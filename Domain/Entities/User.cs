@@ -18,5 +18,8 @@ namespace Domain.Entities
         public Guid? DivisionId { get; set; }
         public Division? Division { get; set; }
         public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
+
+        /// <summary>Direct (user-level) right assignments — grant or deny (dynamic RBAC, ADR-011).</summary>
+        public ICollection<UserRight> UserRights { get; set; } = new List<UserRight>();
     }
 }

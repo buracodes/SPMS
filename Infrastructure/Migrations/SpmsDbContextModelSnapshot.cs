@@ -1761,6 +1761,10 @@ namespace Infrastructure.Migrations
                     b.Property<Guid>("PermissionId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("Effect")
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
                     b.Property<Guid>("CreatedBy")
                         .HasColumnType("uniqueidentifier");
 
@@ -1793,6 +1797,62 @@ namespace Infrastructure.Migrations
                     b.HasIndex("PermissionId");
 
                     b.ToTable("RolePermissions");
+                });
+
+            modelBuilder.Entity("Domain.Entities.UserRight", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PermissionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Effect")
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<string?>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PermissionId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("UserId", "PermissionId")
+                        .IsUnique()
+                        .HasFilter("[IsDeleted] = 0");
+
+                    b.ToTable("UserRights");
                 });
 
             modelBuilder.Entity("Domain.Entities.Scorecard", b =>
@@ -2742,13 +2802,32 @@ namespace Infrastructure.Migrations
                     b.Navigation("Role");
                 });
 
-            modelBuilder.Entity("Domain.Entities.Scorecard", b =>
+            modelBuilder.Entity("Domain.Entities.UserRight", b =>
                 {
-                    b.HasOne("Domain.Entities.FiscalYear", "FiscalYear")
-                        .WithMany("Scorecards")
-                        .HasForeignKey("FiscalYearId")
+                    b.HasOne("Domain.Entities.Permission", "Permission")
+                        .WithMany()
+                        .HasForeignKey("PermissionId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("Domain.Entities.User", "User")
+                        .WithMany("UserRights")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Permission");
+
+                    b.Navigation("User");
+                });
+
+                modelBuilder.Entity("Domain.Entities.Scorecard", b =>
+                    {
+                        b.HasOne("Domain.Entities.FiscalYear", "FiscalYear")
+                            .WithMany("Scorecards")
+                            .HasForeignKey("FiscalYearId")
+                            .OnDelete(DeleteBehavior.Restrict)
+                            .IsRequired();
 
                     b.Navigation("FiscalYear");
                 });
@@ -2907,6 +2986,8 @@ namespace Infrastructure.Migrations
 
             modelBuilder.Entity("Domain.Entities.User", b =>
                 {
+                    b.Navigation("UserRights");
+
                     b.Navigation("UserRoles");
                 });
 #pragma warning restore 612, 618

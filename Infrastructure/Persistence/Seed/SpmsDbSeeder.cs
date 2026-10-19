@@ -313,7 +313,8 @@ namespace Infrastructure.Persistence.Seed
 
             [Roles.PowerUser] = Permissions.All
                 .Select(p => p.Name)
-                .Except(new[] { Permissions.AdminUsersManage, Permissions.AdminRolesManage, Permissions.AdminConfigManage })
+                .Except(new[] { Permissions.AdminUsersManage, Permissions.AdminRolesManage, Permissions.AdminConfigManage,
+                                Permissions.AdminRightsManage, Permissions.AdminUserRightsManage })
                 .ToArray(),
 
             [Roles.Executive] = new[]

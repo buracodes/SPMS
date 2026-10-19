@@ -78,7 +78,24 @@ namespace Domain.Constants
         // permission rather than reusing AdminConfigManage (which Power Users deliberately lack).
         public const string AdminRagThresholdsManage = "admin:rag.thresholds.manage";
 
+        // ── Access Control Management page (dynamic RBAC) ──────────────────────
+        // Reading the management page (summary, catalogs, effective access, audit) requires
+        // only the view right; the three manage rights represent the distinct capabilities
+        // (§12 of the access-control workstream): group/membership/group-right administration,
+        // the rights catalog, and direct user-level grants&denies.
+        public const string AdminAccessView = "admin:access.view";
+        public const string AdminAccessGroupsManage = "admin:access.groups.manage";
+        public const string AdminRightsManage = "admin:access.rights.manage";
+        public const string AdminUserRightsManage = "admin:access.user-rights.manage";
+
         public const string PermissionClaimType = "permission";
+
+        /// <summary>
+        /// Catalog-key format for programmatically created rights (the rights catalog on the
+        /// Access Control Management page): "module:resource[.action]", lowercase and dotted.
+        /// Seeded catalog keys all satisfy this; it guards new entries created at runtime.
+        /// </summary>
+        public const string PermissionKeyPattern = "^[a-z0-9]+:[a-z0-9.]+$";
 
         public static readonly IReadOnlyList<PermissionDefinition> All = new[]
         {
@@ -145,6 +162,10 @@ namespace Domain.Constants
             new PermissionDefinition(AdminConfigManage, "Admin", "Manage system configuration"),
             new PermissionDefinition(AdminAuditView, "Admin", "View audit logs"),
             new PermissionDefinition(AdminRagThresholdsManage, "Admin", "Manage RAG status thresholds"),
+            new PermissionDefinition(AdminAccessView, "Admin", "View the Access Control Management page"),
+            new PermissionDefinition(AdminAccessGroupsManage, "Admin", "Manage access groups, memberships and group rights"),
+            new PermissionDefinition(AdminRightsManage, "Admin", "Manage the rights (permission) catalog"),
+            new PermissionDefinition(AdminUserRightsManage, "Admin", "Manage direct user grants and denies"),
         };
     }
 }

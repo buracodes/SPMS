@@ -102,6 +102,7 @@ public DbSet<Goal> Goals { get; set; }
         public DbSet<Permission> Permissions { get; set; }
         public DbSet<UserRole> UserRoles { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
+        public DbSet<UserRight> UserRights { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }
         public DbSet<OrganizationProfile> OrganizationProfiles { get; set; }
         public DbSet<CoreValue> CoreValues { get; set; }

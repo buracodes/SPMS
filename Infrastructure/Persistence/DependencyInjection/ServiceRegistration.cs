@@ -2,11 +2,13 @@ using Application.Interface;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Jobs;
+using Application.CQRS.AccessControl;
 using Infrastructure.Jobs;
 using Infrastructure.Options;
 using Infrastructure.Persistence.Context;
 using Infrastructure.Persistence.Interceptors;
 using Infrastructure.Persistence.Repositories;
+using Infrastructure.Persistence.Services;
 using Infrastructure.Service;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -62,6 +64,8 @@ services.AddScoped<IDivisionScoreSnapshotRepository, DivisionScoreSnapshotReposi
 
             services.AddScoped<IUserRepository, UserRepository>();
             services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
+            services.AddScoped<IRbacRepository, RbacRepository>();
+            services.AddScoped<IEffectivePermissionService, EffectivePermissionService>();
 
             services.AddScoped<IPasswordHasher, PasswordHasherService>();
 

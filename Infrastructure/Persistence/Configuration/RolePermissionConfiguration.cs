@@ -12,6 +12,8 @@ namespace Infrastructure.Persistence.Configuration
         public void Configure(EntityTypeBuilder<RolePermission> builder)
         {
             builder.HasKey(rp => new { rp.RoleId, rp.PermissionId });
+
+            builder.Property(rp => rp.Effect).HasDefaultValue(Domain.Enums.PermissionEffect.Grant);
         }
     }
 }
