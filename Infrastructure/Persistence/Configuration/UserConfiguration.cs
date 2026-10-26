@@ -25,7 +25,8 @@ namespace Infrastructure.Persistence.Configuration
                 .HasForeignKey(u => u.DivisionId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            builder.HasIndex(u => u.DivisionId).IsUnique();
+            // A division has many employees, so this index only supports lookups.
+            builder.HasIndex(u => u.DivisionId);
         }
     }
 }

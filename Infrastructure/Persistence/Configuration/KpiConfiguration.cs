@@ -71,6 +71,8 @@ public class KpiConfiguration : IEntityTypeConfiguration<Kpi>
         builder.HasIndex(k => k.KraId);
         builder.HasIndex(k => k.DivisionGoalId);
         builder.HasIndex(k => k.ParentKpiId);
+        builder.HasIndex(k => k.OwnerId);
+        builder.HasIndex(k => k.DivisionOwnerId);
 
         builder.ToTable(k =>
         {
@@ -83,6 +85,11 @@ public class KpiConfiguration : IEntityTypeConfiguration<Kpi>
             k.HasCheckConstraint(
                 "CK_Kpis_Weight_Range",
                 "CAST([Weight] AS REAL) > 0.0 AND CAST([Weight] AS REAL) <= 100.0");
+            // A KPI is owned by at most one account type. Both columns stay nullable so
+            // legacy KPIs with no owner remain valid.
+            k.HasCheckConstraint(
+                "CK_Kpis_Owner_AtMostOne",
+                "NOT ([OwnerId] IS NOT NULL AND [DivisionOwnerId] IS NOT NULL)");
         });
     }
 }

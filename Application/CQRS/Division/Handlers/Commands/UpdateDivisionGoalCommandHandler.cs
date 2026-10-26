@@ -3,6 +3,7 @@ using Application.DTOS.Division;
 using Application.Exceptions;
 using Application.Interface;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using Domain.Entities;
 using Domain.Enums;
@@ -17,13 +18,16 @@ namespace Application.CQRS.Division.Handlers.Commands
         private readonly IDivisionContributionRepository contributionRepository;
         private readonly IGoalRepository goalRepository;
         private readonly IUnitOfWork unitOfWork;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public UpdateDivisionGoalCommandHandler(
             IDivisionGoalRepository _divisionGoalRepository,
             IDivisionContributionRepository _contributionRepository,
             IGoalRepository _goalRepository,
-            IUnitOfWork _unitOfWork)
+            IUnitOfWork _unitOfWork,
+            IOrganizationalScopeService _organizationalScope)
         {
+            organizationalScope = _organizationalScope;
             divisionGoalRepository = _divisionGoalRepository;
             contributionRepository = _contributionRepository;
             goalRepository = _goalRepository;
@@ -38,6 +42,8 @@ namespace Application.CQRS.Division.Handlers.Commands
 
             var plan = goal.DivisionPlan
                 ?? throw new BadRequestException("The division goal is not attached to a plan.");
+
+            await organizationalScope.EnsureDivisionAsync(plan.DivisionId, cancellationToken);
 
             if (plan.PlanStatus != DivisionPlanStatus.Draft)
                 throw new BadRequestException("Division goals cannot be edited once the plan has been finalized or locked.");

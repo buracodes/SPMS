@@ -12,6 +12,7 @@ namespace Domain.Entities
         public required string FullName { get; set; }
         public required string PasswordHash { get; set; }
         public bool IsActive { get; set; } = true;
+        public bool IsAuthenticated { get; set; } = false;
         public int FailedLoginCount { get; set; }
         public DateTime? LockedUntilUtc { get; set; }
         public DateTime? LastLoginAtUtc { get; set; }

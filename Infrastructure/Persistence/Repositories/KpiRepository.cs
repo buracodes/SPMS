@@ -16,6 +16,7 @@ public class KpiRepository : GenericRepository<Kpi>, IKpiRepository
         return await context.Kpis
             .Include(k => k.Scorecard)
             .ThenInclude(s => s.FiscalYear)
+            .Include(k => k.Owner)
             .Include(k => k.DivisionOwner)
             .FirstOrDefaultAsync(k => k.Id == id);
     }

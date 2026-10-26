@@ -102,7 +102,8 @@ public class PlanningFilterQueryHandlerTests
             new KpiRepository(lease.Context),
             new ScorecardRepository(lease.Context),
             new KraRepository(lease.Context),
-            new GoalRepository(lease.Context));
+            new GoalRepository(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static GetAllKraQueryHandler KraHandler(TestDbContextLease lease)
         => new(

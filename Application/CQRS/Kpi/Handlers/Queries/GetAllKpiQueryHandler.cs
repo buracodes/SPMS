@@ -1,6 +1,7 @@
 using Application.CQRS.Kpi.Requests.Queries;
 using Application.DTOS.Kpi;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using MediatR;
 
@@ -12,17 +13,20 @@ public class GetAllKpiQueryHandler : IRequestHandler<GetAllKpiQueryRequest, Resp
     private readonly IScorecardRepository scorecardRepository;
     private readonly IKraRepository kraRepository;
     private readonly IGoalRepository goalRepository;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     public GetAllKpiQueryHandler(
         IKpiRepository _kpiRepository,
         IScorecardRepository _scorecardRepository,
         IKraRepository _kraRepository,
-        IGoalRepository _goalRepository)
+        IGoalRepository _goalRepository,
+        IOrganizationalScopeService _organizationalScope)
     {
         kpiRepository = _kpiRepository;
         scorecardRepository = _scorecardRepository;
         kraRepository = _kraRepository;
         goalRepository = _goalRepository;
+        organizationalScope = _organizationalScope;
     }
 
     public async Task<Response<List<GetAllKpiDto>>> Handle(GetAllKpiQueryRequest request, CancellationToken cancellationToken)
@@ -37,6 +41,19 @@ public class GetAllKpiQueryHandler : IRequestHandler<GetAllKpiQueryRequest, Resp
         var goalNameById = goals.ToDictionary(g => g.Id, g => g.Name);
 
         var filtered = kpis.AsEnumerable();
+
+        // Corporate visibility comes from the live authorization state. A principal without
+        // it only sees KPIs owned by its division; one with neither corporate access nor a
+        // division sees nothing (fail closed).
+        if (!await organizationalScope.HasCorporateAccessAsync(cancellationToken))
+        {
+            var divisionId = organizationalScope.DivisionId;
+            filtered = divisionId.HasValue
+                ? filtered.Where(k =>
+                    (k.OwnerId.HasValue && k.Owner?.DivisionId == divisionId.Value) ||
+                    (k.DivisionOwnerId.HasValue && k.DivisionOwnerId.Value == divisionId.Value))
+                : filtered.Where(_ => false);
+        }
 
         if (request.ScorecardId.HasValue)
             filtered = filtered.Where(k => k.ScorecardId == request.ScorecardId.Value);

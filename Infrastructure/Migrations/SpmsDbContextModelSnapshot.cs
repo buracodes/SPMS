@@ -67,7 +67,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("EntityType", "EntityId");
 
-                    b.ToTable("AuditLogEntries");
+                    b.ToTable("AuditLogEntries", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.CoreValue", b =>
@@ -116,7 +116,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("OrganizationProfileId");
 
-                    b.ToTable("CoreValues");
+                    b.ToTable("CoreValues", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Division", b =>
@@ -170,7 +170,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("Divisions");
+                    b.ToTable("Divisions", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.DivisionContribution", b =>
@@ -221,7 +221,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("DivisionPlanId", "GoalId")
                         .IsUnique();
 
-                    b.ToTable("DivisionContributions");
+                    b.ToTable("DivisionContributions", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.DivisionGoal", b =>
@@ -284,7 +284,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("DivisionPlanId", "Name")
                         .IsUnique();
 
-                    b.ToTable("DivisionGoals");
+                    b.ToTable("DivisionGoals", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.DivisionPlan", b =>
@@ -339,7 +339,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("DivisionId", "ScorecardId")
                         .IsUnique();
 
-                    b.ToTable("DivisionPlans");
+                    b.ToTable("DivisionPlans", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.DivisionScoreSnapshot", b =>
@@ -404,7 +404,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("DivisionGoalId", "FiscalPeriodId", "Granularity", "CalculatedAt");
 
-                    b.ToTable("DivisionScoreSnapshots");
+                    b.ToTable("DivisionScoreSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.FiscalPeriod", b =>
@@ -466,7 +466,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("FiscalYearId", "StartDate", "EndDate")
                         .IsUnique();
 
-                    b.ToTable("FiscalPeriods");
+                    b.ToTable("FiscalPeriods", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.FiscalYear", b =>
@@ -523,7 +523,7 @@ namespace Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
 
-                    b.ToTable("FiscalYears");
+                    b.ToTable("FiscalYears", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Goal", b =>
@@ -582,7 +582,7 @@ namespace Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
 
-                    b.ToTable("Goals", t =>
+                    b.ToTable("Goals", null, t =>
                         {
                             t.HasCheckConstraint("CK_Goals_Weight_Range", "CAST([Weight] AS REAL) > 0.0 AND CAST([Weight] AS REAL) <= 100.0");
                         });
@@ -646,7 +646,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("GoalId", "FiscalPeriodId", "Granularity", "CalculatedAt")
                         .IsUnique();
 
-                    b.ToTable("GoalScoreSnapshots");
+                    b.ToTable("GoalScoreSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Initiative", b =>
@@ -753,7 +753,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("Status");
 
-                    b.ToTable("Initiatives", t =>
+                    b.ToTable("Initiatives", null, t =>
                         {
                             t.HasCheckConstraint("CK_Initiatives_DateWindow", "([StartDate] IS NOT NULL AND [EndDate] IS NOT NULL AND [StartDate] <= [EndDate])");
                         });
@@ -969,9 +969,11 @@ namespace Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[KraId] IS NOT NULL AND [IsDeleted] = 0");
 
-                    b.ToTable("Kpis", t =>
+                    b.ToTable("Kpis", null, t =>
                         {
                             t.HasCheckConstraint("CK_Kpis_KraOrDivisionGoal", "([KraId] IS NOT NULL AND [DivisionGoalId] IS NULL) OR ([KraId] IS NULL AND [DivisionGoalId] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_Kpis_Owner_AtMostOne", "NOT ([OwnerId] IS NOT NULL AND [DivisionOwnerId] IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_Kpis_Weight_Range", "CAST([Weight] AS REAL) > 0.0 AND CAST([Weight] AS REAL) <= 100.0");
                         });
@@ -1038,7 +1040,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("KpiId", "FiscalPeriodId", "DataSource", "AsOfDate");
 
-                    b.ToTable("KpiActualValues");
+                    b.ToTable("KpiActualValues", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.KpiScoreSnapshot", b =>
@@ -1107,7 +1109,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("KpiId", "FiscalPeriodId", "Granularity", "CalculatedAt")
                         .IsUnique();
 
-                    b.ToTable("KpiScoreSnapshots");
+                    b.ToTable("KpiScoreSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.KpiTarget", b =>
@@ -1161,7 +1163,7 @@ namespace Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
 
-                    b.ToTable("KpiTargets");
+                    b.ToTable("KpiTargets", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Kra", b =>
@@ -1238,7 +1240,7 @@ namespace Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
 
-                    b.ToTable("Kras", t =>
+                    b.ToTable("Kras", null, t =>
                         {
                             t.HasCheckConstraint("CK_Kras_Weight_Range", "CAST([Weight] AS REAL) > 0.0 AND CAST([Weight] AS REAL) <= 100.0");
                         });
@@ -1302,7 +1304,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("KraId", "FiscalPeriodId", "Granularity", "CalculatedAt")
                         .IsUnique();
 
-                    b.ToTable("KraScoreSnapshots");
+                    b.ToTable("KraScoreSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Milestone", b =>
@@ -1419,7 +1421,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("OrganizationProfiles");
+                    b.ToTable("OrganizationProfiles", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.PeriodLockConfig", b =>
@@ -1490,7 +1492,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("ScorecardId", "FiscalPeriodId")
                         .IsUnique();
 
-                    b.ToTable("PeriodLockConfigs");
+                    b.ToTable("PeriodLockConfigs", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Permission", b =>
@@ -1542,7 +1544,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("Permissions");
+                    b.ToTable("Permissions", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.PestelItem", b =>
@@ -1597,7 +1599,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("OrganizationProfileId");
 
-                    b.ToTable("PestelItems");
+                    b.ToTable("PestelItems", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.RagThresholdConfig", b =>
@@ -1656,7 +1658,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("ScopeKey", "Band")
                         .IsUnique();
 
-                    b.ToTable("RagThresholdConfigs");
+                    b.ToTable("RagThresholdConfigs", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.RefreshToken", b =>
@@ -1704,7 +1706,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("RefreshTokens");
+                    b.ToTable("RefreshTokens", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Role", b =>
@@ -1751,7 +1753,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("Roles");
+                    b.ToTable("Roles", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.RolePermission", b =>
@@ -1798,7 +1800,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("PermissionId");
 
-                    b.ToTable("RolePermissions");
+                    b.ToTable("RolePermissions", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.Scorecard", b =>
@@ -1855,7 +1857,7 @@ namespace Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
 
-                    b.ToTable("Scorecards");
+                    b.ToTable("Scorecards", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.ScorecardScoreSnapshot", b =>
@@ -1911,7 +1913,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("ScorecardId", "FiscalPeriodId", "Granularity", "CalculatedAt")
                         .IsUnique();
 
-                    b.ToTable("ScorecardScoreSnapshots");
+                    b.ToTable("ScorecardScoreSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.StrategicTheme", b =>
@@ -1968,7 +1970,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("OrganizationProfileId");
 
-                    b.ToTable("StrategicThemes");
+                    b.ToTable("StrategicThemes", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.SwotItem", b =>
@@ -2023,7 +2025,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("OrganizationProfileId");
 
-                    b.ToTable("SwotItems");
+                    b.ToTable("SwotItems", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.SystemConfig", b =>
@@ -2079,7 +2081,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Key")
                         .IsUnique();
 
-                    b.ToTable("SystemConfigs");
+                    b.ToTable("SystemConfigs", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.UnitsOfMeasure", b =>
@@ -2132,7 +2134,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("UnitsOfMeasures");
+                    b.ToTable("UnitsOfMeasures", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.User", b =>
@@ -2163,6 +2165,9 @@ namespace Infrastructure.Migrations
                         .HasColumnType("nvarchar(200)");
 
                     b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsAuthenticated")
                         .HasColumnType("bit");
 
                     b.Property<bool>("IsDeleted")
@@ -2201,9 +2206,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DivisionId")
-                        .IsUnique()
-                        .HasFilter("[DivisionId] IS NOT NULL");
+                    b.HasIndex("DivisionId");
 
                     b.HasIndex("Email")
                         .IsUnique()
@@ -2212,7 +2215,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Username")
                         .IsUnique();
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.UserRight", b =>
@@ -2269,7 +2272,7 @@ namespace Infrastructure.Migrations
                         .HasDatabaseName("IX_UserRights_UserId_PermissionId")
                         .HasFilter("[IsDeleted] = 0");
 
-                    b.ToTable("UserRights");
+                    b.ToTable("UserRights", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.UserRole", b =>
@@ -2311,7 +2314,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("RoleId");
 
-                    b.ToTable("UserRoles");
+                    b.ToTable("UserRoles", (string)null);
                 });
 
             modelBuilder.Entity("Domain.Entities.CoreValue", b =>

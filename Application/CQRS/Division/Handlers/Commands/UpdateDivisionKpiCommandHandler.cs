@@ -3,6 +3,7 @@ using Application.DTOS.Division;
 using Application.Exceptions;
 using Application.Interface;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using Domain.Entities;
 using Domain.Enums;
@@ -20,6 +21,7 @@ namespace Application.CQRS.Division.Handlers.Commands
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiTargetRepository kpiTargetRepository;
         private readonly IUnitOfWork unitOfWork;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public UpdateDivisionKpiCommandHandler(
             IKpiRepository _kpiRepository,
@@ -27,8 +29,10 @@ namespace Application.CQRS.Division.Handlers.Commands
             IScorecardRepository _scorecardRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiTargetRepository _kpiTargetRepository,
-            IUnitOfWork _unitOfWork)
+            IUnitOfWork _unitOfWork,
+            IOrganizationalScopeService _organizationalScope)
         {
+            organizationalScope = _organizationalScope;
             kpiRepository = _kpiRepository;
             divisionGoalRepository = _divisionGoalRepository;
             scorecardRepository = _scorecardRepository;
@@ -51,6 +55,11 @@ namespace Application.CQRS.Division.Handlers.Commands
 
             if (goal.DivisionPlan == null || goal.DivisionPlan.PlanStatus != DivisionPlanStatus.Draft)
                 throw new BadRequestException("Division KPIs cannot be edited once the plan has been finalized or locked.");
+
+            if (goal.DivisionPlan != null)
+            {
+                await organizationalScope.EnsureDivisionAsync(goal.DivisionPlan.DivisionId, cancellationToken);
+            }
 
             if (request.Weight.HasValue && request.Weight.Value != kpi.Weight)
             {

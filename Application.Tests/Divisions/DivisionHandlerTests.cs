@@ -71,7 +71,8 @@ public class DivisionHandlerTests
             new DivisionContributionRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static CreateDivisionGoalCommandHandler CreateDivisionGoalHandler(TestDbContextLease lease)
         => new(
@@ -81,7 +82,8 @@ public class DivisionHandlerTests
             new DivisionContributionRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static CreateDivisionKpiCommandHandler CreateDivisionKpiHandler(TestDbContextLease lease)
         => new(
@@ -91,7 +93,8 @@ public class DivisionHandlerTests
             new DivisionGoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static GetDivisionPlanQueryHandler CreateGetPlanHandler(TestDbContextLease lease)
         => new(
@@ -102,7 +105,8 @@ public class DivisionHandlerTests
             CreatePeriodService(lease),
             new FiscalPeriodRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
-            new TestRagThresholdService());
+            new TestRagThresholdService(),
+            new TestOrganizationalScopeService());
 
     private static DivisionPeriodCalculationService CreatePeriodService(TestDbContextLease lease)
         => new(

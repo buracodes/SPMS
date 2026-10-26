@@ -12,7 +12,7 @@ namespace Infrastructure.Persistence.DependencyInjection
 {
     public static class DatabaseInitializer
     {
-        public static async Task InitializeDatabaseAsync(this IServiceProvider services)
+        public static async Task InitializeDatabaseAsync(this IServiceProvider services, bool seedTemporaryData = false)
         {
             using var scope = services.CreateScope();
 
@@ -24,7 +24,7 @@ namespace Infrastructure.Persistence.DependencyInjection
             var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
             var defaultAdmin = scope.ServiceProvider.GetRequiredService<DefaultAdminOptions>();
 
-            await SpmsDbSeeder.SeedAsync(context, passwordHasher, defaultAdmin);
+            await SpmsDbSeeder.SeedAsync(context, passwordHasher, defaultAdmin, seedTemporaryData);
 
             logger.LogInformation("Database initialized and seeded successfully.");
         }

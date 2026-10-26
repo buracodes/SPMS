@@ -57,6 +57,10 @@ namespace Domain.Constants
         public const string DashboardView = "dashboard:view";
         public const string DashboardConfigure = "dashboard:configure";
 
+        // Corporate-wide performance monitoring. A division-scoped user never receives this,
+        // so the centralized monitoring page and its API fall back to their own division.
+        public const string PerformanceMonitorView = "performance:monitor.view";
+
         public const string ReportsView = "reports:view";
         public const string ReportsExport = "reports:export";
 
@@ -144,6 +148,7 @@ namespace Domain.Constants
 
             new PermissionDefinition(DashboardView, "Dashboard", "View dashboards"),
             new PermissionDefinition(DashboardConfigure, "Dashboard", "Configure custom dashboards and widgets"),
+            new PermissionDefinition(PerformanceMonitorView, "Dashboard", "View corporate-wide performance monitoring"),
 
             new PermissionDefinition(ReportsView, "Reports", "View reports"),
             new PermissionDefinition(ReportsExport, "Reports", "Export reports (PDF/Excel/CSV)"),

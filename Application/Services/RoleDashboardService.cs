@@ -233,7 +233,10 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             return false;
         }
 
-        return kpi.OwnerId == userId || kpi.DivisionOwnerId == userId;
+        var divisionId = currentUserService.DivisionId;
+        var divisionOwned = divisionId.HasValue && kpi.DivisionOwnerId == divisionId;
+
+        return kpi.OwnerId == userId || divisionOwned;
     }
 
     // ------------------------------------------------------------------ loading
@@ -350,6 +353,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         {
             // A data entry user may only work with scorecards that actually contain their KPIs.
             var userId = currentUserService.UserId;
+            var divisionId = currentUserService.DivisionId;
             if (userId is Guid ownerId)
             {
                 var ownedKpiScorecards = allScorecards
@@ -361,7 +365,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
                 foreach (var scorecardId in ownedKpiScorecards)
                 {
                     var scorecardKpis = await kpiRepository.GetByScorecardAsync(scorecardId);
-                    if (scorecardKpis.Any(k => k.OwnerId == ownerId || k.DivisionOwnerId == ownerId))
+                    if (scorecardKpis.Any(k => k.OwnerId == ownerId || (divisionId.HasValue && k.DivisionOwnerId == divisionId)))
                     {
                         assignedScorecardIds.Add(scorecardId);
                     }

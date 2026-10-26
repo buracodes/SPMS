@@ -2,6 +2,7 @@ using Application.CQRS.Division.Requests.Queries;
 using Application.DTOS.Division;
 using Application.Exceptions;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using MediatR;
 
@@ -13,21 +14,26 @@ namespace Application.CQRS.Division.Handlers.Queries
         private readonly IDivisionPlanRepository divisionPlanRepository;
         private readonly IDivisionGoalRepository divisionGoalRepository;
         private readonly IKpiRepository kpiRepository;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public GetDivisionPlansQueryHandler(
             IDivisionRepository _divisionRepository,
             IDivisionPlanRepository _divisionPlanRepository,
             IDivisionGoalRepository _divisionGoalRepository,
-            IKpiRepository _kpiRepository)
+            IKpiRepository _kpiRepository,
+            IOrganizationalScopeService _organizationalScope)
         {
             divisionRepository = _divisionRepository;
             divisionPlanRepository = _divisionPlanRepository;
             divisionGoalRepository = _divisionGoalRepository;
             kpiRepository = _kpiRepository;
+            organizationalScope = _organizationalScope;
         }
 
         public async Task<Response<List<DivisionPlanSummaryDto>>> Handle(GetDivisionPlansQueryRequest request, CancellationToken cancellationToken)
         {
+            await organizationalScope.EnsureDivisionAsync(request.DivisionId, cancellationToken);
+
             var division = await divisionRepository.GetById(request.DivisionId);
             if (division == null)
             {

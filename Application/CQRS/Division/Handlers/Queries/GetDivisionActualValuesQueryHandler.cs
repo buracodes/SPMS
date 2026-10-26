@@ -15,7 +15,7 @@ public class GetDivisionActualValuesQueryHandler : IRequestHandler<GetDivisionAc
     private readonly IDivisionGoalRepository divisionGoalRepository;
     private readonly IKpiRepository kpiRepository;
     private readonly IKpiActualValueRepository kpiActualValueRepository;
-    private readonly ICurrentUserService currentUserService;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     public GetDivisionActualValuesQueryHandler(
         IDivisionRepository _divisionRepository,
@@ -23,25 +23,22 @@ public class GetDivisionActualValuesQueryHandler : IRequestHandler<GetDivisionAc
         IDivisionGoalRepository _divisionGoalRepository,
         IKpiRepository _kpiRepository,
         IKpiActualValueRepository _kpiActualValueRepository,
-        ICurrentUserService _currentUserService)
-    {
-        divisionRepository = _divisionRepository;
-        divisionPlanRepository = _divisionPlanRepository;
-        divisionGoalRepository = _divisionGoalRepository;
-        kpiRepository = _kpiRepository;
-        kpiActualValueRepository = _kpiActualValueRepository;
-        currentUserService = _currentUserService;
-    }
+        IOrganizationalScopeService _organizationalScope)
+        {
+            divisionRepository = _divisionRepository;
+            divisionPlanRepository = _divisionPlanRepository;
+            divisionGoalRepository = _divisionGoalRepository;
+            kpiRepository = _kpiRepository;
+            kpiActualValueRepository = _kpiActualValueRepository;
+            organizationalScope = _organizationalScope;
+        }
 
     public async Task<Response<IReadOnlyList<DivisionActualValueDto>>> Handle(
         GetDivisionActualValuesQueryRequest request,
         CancellationToken cancellationToken)
     {
         var divisionId = request.DivisionId;
-        if (currentUserService.DivisionId.HasValue && currentUserService.DivisionId.Value != divisionId)
-        {
-            throw new ForbiddenException("A division account can only view actual values for its own division.");
-        }
+        await organizationalScope.EnsureDivisionAsync(divisionId, cancellationToken);
 
         var division = await divisionRepository.GetById(divisionId);
         if (division == null)

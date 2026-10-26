@@ -10,6 +10,7 @@ public class KpiDto : CommonEntityDto
     public Guid? KraId { get; set; }
     public Guid? DivisionGoalId { get; set; }
     public Guid? OwnerId { get; set; }
+    public string? OwnerName { get; set; }
     public Guid? DivisionOwnerId { get; set; }
     public string? DivisionOwnerName { get; set; }
     public required string Name { get; set; }

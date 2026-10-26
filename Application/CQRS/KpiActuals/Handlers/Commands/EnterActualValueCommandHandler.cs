@@ -50,6 +50,8 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
                 throw new NotFoundException(nameof(Kpi), dto.KpiId);
             }
 
+            KpiActualWriteGuard.EnsureWriteAllowed(kpi, currentUserService);
+
             var period = await fiscalPeriodRepository.GetById(dto.FiscalPeriodId);
             if (period == null)
             {

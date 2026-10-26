@@ -15,7 +15,8 @@ namespace Infrastructure.Persistence.Seed
         public static async Task SeedAsync(
             SpmsDbContext context,
             IPasswordHasher passwordHasher,
-            DefaultAdminOptions defaultAdmin)
+            DefaultAdminOptions defaultAdmin,
+            bool seedTemporaryData = false)
         {
             await SeedPermissionsAsync(context);
             await SeedRolesAsync(context);
@@ -25,6 +26,11 @@ namespace Infrastructure.Persistence.Seed
             await SeedOrganizationProfileAsync(context);
             await SeedDivisionAccountsAsync(context, passwordHasher);
             await SeedRagThresholdsAsync(context);
+
+            if (seedTemporaryData)
+            {
+                await SeedTemporaryDirectoryAsync(context, passwordHasher);
+            }
         }
 
         private static async Task SeedPermissionsAsync(SpmsDbContext context)
@@ -307,6 +313,94 @@ namespace Infrastructure.Persistence.Seed
             }
         }
 
+        /// <summary>
+        /// Development-only directory used to exercise multi-user and multi-division behaviour:
+        /// six temporary divisions and ten temporary employees (View Only, plus Data Input for the
+        /// first eight). Idempotent by code/username and never touches existing rows.
+        /// </summary>
+        private static async Task SeedTemporaryDirectoryAsync(SpmsDbContext context, IPasswordHasher passwordHasher)
+        {
+            const int divisionCount = 6;
+            const int employeeCount = 10;
+
+            var divisions = await context.Divisions
+                .Where(d => d.Code.StartsWith("TEMP-DIV-"))
+                .ToDictionaryAsync(d => d.Code, StringComparer.OrdinalIgnoreCase);
+
+            for (var i = 1; i <= divisionCount; i++)
+            {
+                var code = $"TEMP-DIV-{i:000}";
+                if (divisions.ContainsKey(code))
+                {
+                    continue;
+                }
+
+                var division = new Division
+                {
+                    Id = Guid.NewGuid(),
+                    Name = $"Temporary Division {i}",
+                    Code = code,
+                    IsActive = true
+                };
+
+                context.Divisions.Add(division);
+                divisions[code] = division;
+            }
+
+            var roles = await context.Roles
+                .Where(r => r.Name == Roles.ViewOnly || r.Name == Roles.DataInputUser)
+                .ToListAsync();
+            var viewOnlyRole = roles.FirstOrDefault(r => r.Name == Roles.ViewOnly);
+            var dataInputRole = roles.FirstOrDefault(r => r.Name == Roles.DataInputUser);
+
+            var existingUsernames = (await context.Users.Select(u => u.Username).ToListAsync())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            for (var i = 1; i <= employeeCount; i++)
+            {
+                var username = $"TEMP-EMP-{i:000}";
+                if (existingUsernames.Contains(username))
+                {
+                    continue;
+                }
+
+                var divisionIndex = i <= 8 ? ((i - 1) / 2) + 1 : i - 4;
+                var divisionCode = $"TEMP-DIV-{divisionIndex:000}";
+                if (!divisions.TryGetValue(divisionCode, out var division))
+                {
+                    continue;
+                }
+
+                var userId = Guid.NewGuid();
+                var user = new User
+                {
+                    Id = userId,
+                    Username = username,
+                    FullName = $"Temporary Employee {i}",
+                    Email = $"{username}@ecx.local",
+                    PasswordHash = passwordHasher.HashPassword(username),
+                    IsActive = true,
+                    DivisionId = division.Id,
+                    UserRoles = new List<UserRole>()
+                };
+
+                if (viewOnlyRole != null)
+                {
+                    user.UserRoles.Add(new UserRole { UserId = userId, RoleId = viewOnlyRole.Id });
+                }
+
+                if (i <= 8 && dataInputRole != null)
+                {
+                    user.UserRoles.Add(new UserRole { UserId = userId, RoleId = dataInputRole.Id });
+                }
+
+                context.Users.Add(user);
+                existingUsernames.Add(username);
+            }
+
+            await context.SaveChangesAsync();
+        }
+
         private static readonly IReadOnlyDictionary<string, string[]> RolePermissionMap = new Dictionary<string, string[]>
         {
             [Roles.Admin] = Permissions.All.Select(p => p.Name).ToArray(),
@@ -319,7 +413,8 @@ namespace Infrastructure.Persistence.Seed
 
             [Roles.Executive] = new[]
             {
-                Permissions.DashboardView, Permissions.DashboardConfigure, Permissions.ReportsView, Permissions.ReportsExport,
+                Permissions.DashboardView, Permissions.DashboardConfigure, Permissions.PerformanceMonitorView,
+                Permissions.ReportsView, Permissions.ReportsExport,
                 Permissions.ScorecardView, Permissions.GoalsView, Permissions.KraView, Permissions.KpiView,
                 Permissions.ActualsView, Permissions.TargetsView, Permissions.InitiativesView,
                 Permissions.DivisionView, Permissions.DivisionReportsView,

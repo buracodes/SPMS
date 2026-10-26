@@ -3,6 +3,7 @@ using Application.DTOS.Division;
 using Application.Exceptions;
 using Application.Interface;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using Domain.Enums;
 using MediatR;
@@ -18,6 +19,7 @@ namespace Application.CQRS.Division.Handlers.Commands
         private readonly IKpiRepository kpiRepository;
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IUnitOfWork unitOfWork;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public CreateDivisionKpiCommandHandler(
             IDivisionRepository _divisionRepository,
@@ -26,8 +28,10 @@ namespace Application.CQRS.Division.Handlers.Commands
             IDivisionGoalRepository _divisionGoalRepository,
             IKpiRepository _kpiRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
-            IUnitOfWork _unitOfWork)
+            IUnitOfWork _unitOfWork,
+            IOrganizationalScopeService _organizationalScope)
         {
+            organizationalScope = _organizationalScope;
             divisionRepository = _divisionRepository;
             scorecardRepository = _scorecardRepository;
             divisionPlanRepository = _divisionPlanRepository;
@@ -39,6 +43,8 @@ namespace Application.CQRS.Division.Handlers.Commands
 
         public async Task<Response<DivisionKpiDto>> Handle(CreateDivisionKpiCommandRequest request, CancellationToken cancellationToken)
         {
+            await organizationalScope.EnsureDivisionAsync(request.DivisionId, cancellationToken);
+
             var division = await divisionRepository.GetById(request.DivisionId);
             if (division == null)
             {

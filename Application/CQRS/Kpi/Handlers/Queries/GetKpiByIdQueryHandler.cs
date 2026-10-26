@@ -35,6 +35,7 @@ public class GetKpiByIdQueryHandler : IRequestHandler<GetKpiByIdQueryRequest, Re
                 KraId = kpi.KraId,
                 DivisionGoalId = kpi.DivisionGoalId,
                 OwnerId = kpi.OwnerId,
+                OwnerName = kpi.Owner?.FullName,
                 DivisionOwnerId = kpi.DivisionOwnerId,
                 DivisionOwnerName = kpi.DivisionOwner?.Name,
                 Name = kpi.Name,

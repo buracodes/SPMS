@@ -16,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Domain.Entities;
 
 namespace Infrastructure.Persistence.DependencyInjection
 {
@@ -30,9 +31,20 @@ namespace Infrastructure.Persistence.DependencyInjection
                     .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
             );
 
-            services.AddScoped<IUnitOfWork, SpmsUnitOfWork>();
+            services.AddDbContext<SecurityDbContext>((serviceProvider, options) =>
+                options.UseSqlServer(configuration.GetConnectionString("SecurityConnection"))
+                    .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
+            );
 
-services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));    
+            services.AddDbContext<hrDbContext>((serviceProvider, options) =>
+                options.UseSqlServer(configuration.GetConnectionString("hrConnection"))
+                    .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
+            );
+
+            services.Configure<LdapSettings>(configuration.GetSection("LdapSettings"));
+
+            services.AddScoped<IUnitOfWork, SpmsUnitOfWork>();
+            services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));    
             services.AddScoped<IGoalRepository, GoalRepository>();
             services.AddScoped<IKraRepository, KraRepository>();
             services.AddScoped<IKpiRepository, KpiRepository>();
@@ -55,7 +67,7 @@ services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
             services.AddScoped<IDivisionPlanRepository, DivisionPlanRepository>();
             services.AddScoped<IDivisionGoalRepository, DivisionGoalRepository>();
             services.AddScoped<IDivisionContributionRepository, DivisionContributionRepository>();
-services.AddScoped<IDivisionScoreSnapshotRepository, DivisionScoreSnapshotRepository>();
+            services.AddScoped<IDivisionScoreSnapshotRepository, DivisionScoreSnapshotRepository>();
 
             services.AddScoped<IInitiativeRepository, InitiativeRepository>();
             services.AddScoped<IMilestoneRepository, MilestoneRepository>();
@@ -80,6 +92,7 @@ services.AddScoped<IDivisionScoreSnapshotRepository, DivisionScoreSnapshotReposi
             services.AddTransient<DivisionScoreRecalculationJob>();
             services.AddTransient<ScoreSnapshotReconciliationJob>();
             services.AddScoped<ISpmsRecurringJobRegistrar, SpmsRecurringJobRegistrar>();
+            services.AddScoped<IAccessControl, AccessControlRepository>();
 
             return services;
         }

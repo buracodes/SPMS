@@ -130,7 +130,20 @@ public class DivisionActualsHandlerTests
             new DivisionGoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
-            currentUserService);
+            ResolveScope(currentUserService));
+
+    /// <summary>
+    /// Mirrors the production rule for these fixtures: a principal with a division claim is
+    /// division-scoped, while a principal without one is corporate only when the live
+    /// permission state grants cross-division visibility.
+    /// </summary>
+    private static IOrganizationalScopeService ResolveScope(ICurrentUserService currentUserService) =>
+        new TestOrganizationalScopeService
+        {
+            UserId = currentUserService.UserId,
+            DivisionId = currentUserService.DivisionId,
+            HasCorporateAccess = !currentUserService.DivisionId.HasValue
+        };
 
     [Fact]
     public async Task EnterValue_DivisionAccountOwnDivision_Succeeds()

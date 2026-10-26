@@ -88,7 +88,7 @@ namespace Infrastructure.Persistence.Context
             property.IsRowVersion();
         }
 
-public DbSet<Goal> Goals { get; set; }
+        public DbSet<Goal> Goals { get; set; }
         public DbSet<Kra> Kras { get; set; }
         public DbSet<Kpi> Kpis { get; set; }
         public DbSet<KpiTarget> KpiTargets { get; set; }
@@ -127,5 +127,43 @@ public DbSet<Goal> Goals { get; set; }
         public DbSet<InitiativeUpdateLog> InitiativeUpdateLogs { get; set; }
         public DbSet<InitiativeDependency> InitiativeDependencies { get; set; }
 
+    }
+
+    public class SecurityDbContext : DbContext
+    {
+        public SecurityDbContext(DbContextOptions<SecurityDbContext> options) : base(options)
+        {
+        }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
+            {
+                foreignKey.DeleteBehavior = DeleteBehavior.Restrict;
+            }
+            modelBuilder.ApplyConfigurationsFromAssembly(
+               typeof(SecurityDbContext).Assembly);
+
+        }
+    }
+
+    public class hrDbContext : DbContext
+    {
+        public hrDbContext(DbContextOptions<hrDbContext> options) : base(options)
+        {
+        }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
+            {
+                foreignKey.DeleteBehavior = DeleteBehavior.Restrict;
+            }
+            modelBuilder.ApplyConfigurationsFromAssembly(
+               typeof(hrDbContext).Assembly);
+
+        }
     }
 }

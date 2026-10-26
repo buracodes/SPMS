@@ -16,19 +16,22 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
     private readonly IScorecardRepository scorecardRepository;
     private readonly IDivisionRepository divisionRepository;
     private readonly IUnitOfWork unitOfWork;
+    private readonly IUserRepository? userRepository;
 
     public CreateKpiCommandHandler(
         IKpiRepository _kpiRepository,
         IKraRepository _kraRepository,
         IScorecardRepository _scorecardRepository,
         IDivisionRepository _divisionRepository,
-        IUnitOfWork _unitOfWork)
+        IUnitOfWork _unitOfWork,
+        IUserRepository? _userRepository = null)
     {
         kpiRepository = _kpiRepository;
         kraRepository = _kraRepository;
         scorecardRepository = _scorecardRepository;
         divisionRepository = _divisionRepository;
         unitOfWork = _unitOfWork;
+        userRepository = _userRepository;
     }
 
     public async Task<Response<KpiDto>> Handle(CreateKpiCommandRequest request, CancellationToken cancellationToken)
@@ -52,6 +55,17 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
             var parentKpi = await kpiRepository.GetById(request.ParentKpiId.Value);
             if (parentKpi == null)
                 throw new NotFoundException(nameof(KpiEntity), request.ParentKpiId.Value);
+        }
+
+        if (request.OwnerId.HasValue && request.DivisionOwnerId.HasValue)
+            throw new BadRequestException("A KPI can be owned by a user or a division, not both.");
+
+        Domain.Entities.User? owner = null;
+        if (request.OwnerId.HasValue && userRepository != null)
+        {
+            owner = await userRepository.GetById(request.OwnerId.Value);
+            if (owner == null || !owner.IsActive)
+                throw new NotFoundException(nameof(Domain.Entities.User), request.OwnerId.Value);
         }
 
         Domain.Entities.Division? divisionOwner = null;
@@ -121,6 +135,7 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
                     KraId = kpi.KraId,
                     DivisionGoalId = kpi.DivisionGoalId,
                     OwnerId = kpi.OwnerId,
+                    OwnerName = owner?.FullName,
                     DivisionOwnerId = kpi.DivisionOwnerId,
                     DivisionOwnerName = divisionOwner?.Name,
                     Name = kpi.Name,

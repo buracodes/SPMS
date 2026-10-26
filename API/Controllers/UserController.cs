@@ -28,17 +28,8 @@ public class UserController : ControllerBase
     [Authorize(Policy = Permissions.AdminUsersManage)]
     public async Task<ActionResult<Response<List<UserDto>>>> GetAll()
     {
-        var users = await userRepository.GetAll();
-        var dtos = users.Select(u => new UserDto
-        {
-            Id = u.Id,
-            Username = u.Username,
-            Email = u.Email,
-            FullName = u.FullName,
-            IsActive = u.IsActive,
-            LastLoginAtUtc = u.LastLoginAtUtc,
-            Roles = u.UserRoles.Select(ur => ur.Role.Name).ToList()
-        }).ToList();
+        var users = await userRepository.GetAllWithRolesAndDivisionAsync();
+        var dtos = users.Select(ToDto).ToList();
         return Ok(new Response<List<UserDto>> { Success = true, Message = "Users retrieved successfully.", Data = dtos });
     }
 
@@ -53,18 +44,35 @@ public class UserController : ControllerBase
         {
             Success = true,
             Message = "User retrieved successfully.",
-            Data = new UserDto
-            {
-                Id = user.Id,
-                Username = user.Username,
-                Email = user.Email,
-                FullName = user.FullName,
-                IsActive = user.IsActive,
-                LastLoginAtUtc = user.LastLoginAtUtc,
-                Roles = user.UserRoles.Select(ur => ur.Role.Name).ToList()
-            }
+            Data = ToDto(user)
         });
     }
+
+    /// <summary>
+    /// Active users available as KPI owners. Deliberately readable with only kpi:view so
+    /// the KPI owner picker works for planners who cannot administer users.
+    /// </summary>
+    [HttpGet("lookup")]
+    [Authorize(Policy = Permissions.KpiView)]
+    public async Task<ActionResult<Response<List<UserDto>>>> Lookup()
+    {
+        var users = await userRepository.GetAllWithRolesAndDivisionAsync();
+        var dtos = users.Where(u => u.IsActive).Select(ToDto).ToList();
+        return Ok(new Response<List<UserDto>> { Success = true, Message = "Users retrieved successfully.", Data = dtos });
+    }
+
+    private static UserDto ToDto(Domain.Entities.User u) => new()
+    {
+        Id = u.Id,
+        Username = u.Username,
+        Email = u.Email,
+        FullName = u.FullName,
+        IsActive = u.IsActive,
+        LastLoginAtUtc = u.LastLoginAtUtc,
+        DivisionId = u.DivisionId,
+        DivisionName = u.Division?.Name,
+        Roles = u.UserRoles.Select(ur => ur.Role.Name).ToList()
+    };
 
     [HttpPost("change-password")]
     [Authorize]

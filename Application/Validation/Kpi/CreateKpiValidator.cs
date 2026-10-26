@@ -21,5 +21,9 @@ public class CreateKpiValidator : AbstractValidator<CreateKpiCommandRequest>
         RuleFor(x => x)
             .Must(x => x.KraId.HasValue ^ x.DivisionGoalId.HasValue)
             .WithMessage("A KPI must belong to exactly one parent: a KRA or a division goal, not both or neither.");
+
+        RuleFor(x => x)
+            .Must(x => !(x.OwnerId.HasValue && x.DivisionOwnerId.HasValue))
+            .WithMessage("A KPI can be owned by a user or a division, not both.");
     }
 }

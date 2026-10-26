@@ -21,12 +21,7 @@ namespace Application.CQRS.Auth.Handlers.Commands
         private readonly IRefreshTokenRepository refreshTokenRepository;
         private readonly SecurityOptions securityOptions;
 
-        public LoginCommandHandler(
-            IUserRepository _userRepository,
-            IPasswordHasher _passwordHasher,
-            ITokenService _tokenService,
-            IRefreshTokenRepository _refreshTokenRepository,
-            SecurityOptions _securityOptions)
+        public LoginCommandHandler( IUserRepository _userRepository, IPasswordHasher _passwordHasher, ITokenService _tokenService, IRefreshTokenRepository _refreshTokenRepository,SecurityOptions _securityOptions)
         {
             userRepository = _userRepository;
             passwordHasher = _passwordHasher;
@@ -41,6 +36,7 @@ namespace Application.CQRS.Auth.Handlers.Commands
             {
                 throw new BadRequestException("Login data is required.");
             }
+           var isAuthenticated = userRepository.AuthenticateToAD(request.Dto.Username, request.Dto.Password);
 
             var user = await userRepository.GetByUsernameWithRolesAndPermissionsAsync(request.Dto.Username);
             if (user == null || !user.IsActive)
@@ -48,27 +44,27 @@ namespace Application.CQRS.Auth.Handlers.Commands
                 throw new UnauthorizedException("Invalid username or password.");
             }
 
-            if (user.LockedUntilUtc.HasValue && user.LockedUntilUtc.Value > DateTime.UtcNow)
-            {
-                throw new UnauthorizedException("Account is temporarily locked due to multiple failed login attempts. Try again later.");
-            }
+            //if (user.LockedUntilUtc.HasValue && user.LockedUntilUtc.Value > DateTime.UtcNow)
+            //{
+            //    throw new UnauthorizedException("Account is temporarily locked due to multiple failed login attempts. Try again later.");
+            //}
 
-            var verified = passwordHasher.VerifyPassword(user.PasswordHash, request.Dto.Password);
-            if (!verified)
-            {
-                user.FailedLoginCount += 1;
-                if (user.FailedLoginCount >= securityOptions.MaxFailedAttempts)
-                {
-                    user.LockedUntilUtc = DateTime.UtcNow.AddMinutes(securityOptions.LockoutMinutes);
-                    user.FailedLoginCount = 0;
-                }
-                await userRepository.Update(user);
-                 throw new UnauthorizedException("Invalid username or password.");
-            }
+            //var verified = passwordHasher.VerifyPassword(user.PasswordHash, request.Dto.Password);
+            //if (!verified)
+            //{
+            //    user.FailedLoginCount += 1;
+            //    if (user.FailedLoginCount >= securityOptions.MaxFailedAttempts)
+            //    {
+            //        user.LockedUntilUtc = DateTime.UtcNow.AddMinutes(securityOptions.LockoutMinutes);
+            //        user.FailedLoginCount = 0;
+            //    }
+            //    await userRepository.Update(user);
+            //    throw new UnauthorizedException("Invalid username or password.");
+            //}
 
-            user.FailedLoginCount = 0;
-            user.LockedUntilUtc = null;
-            user.LastLoginAtUtc = DateTime.UtcNow;
+            //user.FailedLoginCount = 0;
+            //user.LockedUntilUtc = null;
+            //user.LastLoginAtUtc = DateTime.UtcNow;
             await userRepository.Update(user);
 
             var roles = user.UserRoles

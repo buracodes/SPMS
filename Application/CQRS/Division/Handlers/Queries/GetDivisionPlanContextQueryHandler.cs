@@ -21,6 +21,7 @@ namespace Application.CQRS.Division.Handlers.Queries
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiTargetRepository kpiTargetRepository;
         private readonly IRagThresholdService ragThresholdService;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public GetDivisionPlanContextQueryHandler(
             IScorecardRepository _scorecardRepository,
@@ -30,8 +31,10 @@ namespace Application.CQRS.Division.Handlers.Queries
             IDivisionPeriodCalculationService _divisionPeriodCalculationService,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiTargetRepository _kpiTargetRepository,
-            IRagThresholdService _ragThresholdService)
+            IRagThresholdService _ragThresholdService,
+            IOrganizationalScopeService _organizationalScope)
         {
+            organizationalScope = _organizationalScope;
             scorecardRepository = _scorecardRepository;
             divisionRepository = _divisionRepository;
             divisionPlanRepository = _divisionPlanRepository;
@@ -45,6 +48,24 @@ namespace Application.CQRS.Division.Handlers.Queries
         public async Task<Response<DivisionPlanDto>> Handle(
             GetDivisionPlanContextQueryRequest request, CancellationToken cancellationToken)
         {
+            // A division account can only load its own plan. A corporate principal may load
+            // any division, or omit the division to get the scorecard's first plan. Any other
+            // principal is rejected: falling through to "first plan of the scorecard" would
+            // expose an arbitrary division's plan to a user without cross-division visibility.
+            if (request.DivisionId.HasValue)
+            {
+                await organizationalScope.EnsureDivisionAsync(request.DivisionId.Value, cancellationToken);
+            }
+            else if (organizationalScope.DivisionId.HasValue)
+            {
+                request.DivisionId = organizationalScope.DivisionId;
+            }
+            else if (!await organizationalScope.HasCorporateAccessAsync(cancellationToken))
+            {
+                throw new ForbiddenException(
+                    "A division must be specified and you do not have access to view division plans across divisions.");
+            }
+
             var scorecard = await scorecardRepository.GetById(request.ScorecardId)
                 ?? throw new NotFoundException(nameof(Scorecard), request.ScorecardId);
 

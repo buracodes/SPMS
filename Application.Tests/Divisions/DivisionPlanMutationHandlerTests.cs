@@ -53,7 +53,8 @@ public class DivisionPlanMutationHandlerTests
             new DivisionContributionRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static CreateDivisionGoalCommandHandler CreateDivisionGoalHandler(TestDbContextLease lease)
         => new(
@@ -63,7 +64,8 @@ public class DivisionPlanMutationHandlerTests
             new DivisionContributionRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static CreateDivisionKpiCommandHandler CreateDivisionKpiHandler(TestDbContextLease lease)
         => new(
@@ -73,20 +75,23 @@ public class DivisionPlanMutationHandlerTests
             new DivisionGoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static UpdateDivisionGoalCommandHandler CreateUpdateGoalHandler(TestDbContextLease lease)
         => new(
             new DivisionGoalRepository(lease.Context),
             new DivisionContributionRepository(lease.Context),
             new GoalRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static DeleteDivisionGoalCommandHandler CreateDeleteGoalHandler(TestDbContextLease lease)
         => new(
             new DivisionGoalRepository(lease.Context),
             new KpiRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static UpdateDivisionKpiCommandHandler CreateUpdateKpiHandler(TestDbContextLease lease)
         => new(
@@ -95,14 +100,17 @@ public class DivisionPlanMutationHandlerTests
             new ScorecardRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
-            new SpmsUnitOfWork(lease.Context));
+            new SpmsUnitOfWork(lease.Context),
+            new TestOrganizationalScopeService());
 
     private static DeleteDivisionKpiCommandHandler CreateDeleteKpiHandler(TestDbContextLease lease)
         => new(
             new KpiRepository(lease.Context),
-            new DivisionGoalRepository(lease.Context));
+            new DivisionGoalRepository(lease.Context),
+            new TestOrganizationalScopeService());
 
-    private static GetDivisionPlanContextQueryHandler CreateContextHandler(TestDbContextLease lease)
+    private static GetDivisionPlanContextQueryHandler CreateContextHandler(
+        TestDbContextLease lease, IOrganizationalScopeService? organizationalScope = null)
         => new(
             new ScorecardRepository(lease.Context),
             new DivisionRepository(lease.Context),
@@ -111,7 +119,8 @@ public class DivisionPlanMutationHandlerTests
             CreatePeriodService(lease),
             new FiscalPeriodRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
-            new TestRagThresholdService());
+            new TestRagThresholdService(),
+            organizationalScope ?? new TestOrganizationalScopeService());
 
     private static DivisionPeriodCalculationService CreatePeriodService(TestDbContextLease lease)
         => new(
@@ -240,7 +249,8 @@ public class DivisionPlanMutationHandlerTests
             new ScorecardRepository(lease.Context),
             new DivisionPlanRepository(lease.Context),
             new TestCurrentUserService { UserId = userId },
-            new KpiTargetRepository(lease.Context));
+            new KpiTargetRepository(lease.Context),
+            new TestOrganizationalScopeService());
 
     // ── Update division goal ──────────────────────────────────────────────
 
@@ -611,6 +621,39 @@ public class DivisionPlanMutationHandlerTests
         var kpi = response.Data.Goals.Single().Kpis.Single();
         Assert.Equal(17, kpi.Targets.Count);
         Assert.Contains(kpi.Targets, t => t.Granularity == TargetGranularity.Annual && t.TargetValue == 60m);
+    }
+
+    [Fact]
+    public async Task GetDivisionPlanContext_NoDivisionAndNoCorporateAccess_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+
+        var scopeWithoutCrossDivisionVisibility = new TestOrganizationalScopeService
+        {
+            HasCorporateAccess = false
+        };
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            CreateContextHandler(lease, scopeWithoutCrossDivisionVisibility).Handle(
+                new GetDivisionPlanContextQueryRequest { ScorecardId = fixture.ScorecardId },
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetDivisionPlanContext_NoDivisionWithCorporateAccess_ReturnsFirstPlan()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+
+        var response = await CreateContextHandler(lease).Handle(
+            new GetDivisionPlanContextQueryRequest { ScorecardId = fixture.ScorecardId },
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(divisionId, response.Data!.DivisionId);
     }
 
     // ── Finalize division plan ────────────────────────────────────────────

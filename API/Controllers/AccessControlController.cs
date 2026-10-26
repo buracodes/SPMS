@@ -1,12 +1,16 @@
 using Application.CQRS.AccessControl.Requests.Commands;
 using Application.CQRS.AccessControl.Requests.Queries;
+using Application.DTOS.AccessControl;
 using Application.Interface.IService;
 using Application.Responses;
 using Asp.Versioning;
 using Domain.Constants;
+using Domain.Entities;
+using Infrastructure.Persistence.Context;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 
@@ -31,11 +35,13 @@ public class AccessControlController : ControllerBase
 {
     private readonly IMediator mediator;
     private readonly IEffectivePermissionService effectivePermissions;
+    private readonly hrDbContext hrDbContext;
 
-    public AccessControlController(IMediator _mediator, IEffectivePermissionService _effectivePermissions)
+    public AccessControlController(IMediator _mediator, IEffectivePermissionService _effectivePermissions, hrDbContext _hrDbContext)
     {
         mediator = _mediator;
         effectivePermissions = _effectivePermissions;
+        hrDbContext = _hrDbContext;
     }
 
     // ── Reads ──────────────────────────────────────────────────────────────
@@ -122,6 +128,34 @@ public class AccessControlController : ControllerBase
     }
 
     // ── Groups (groups capability) ─────────────────────────────────────────
+
+    /// <summary>
+    /// Active employees from the external HR database, used by the employee pickers.
+    /// The HR schema is outside the SPMS model, so the query projects into
+    /// <see cref="HrEmployeeDto"/> and casts EmpId/Status to stable CLR types.
+    /// </summary>
+    [HttpGet("getEmployeeHR")]
+    [Authorize(Policy = Permissions.AdminAccessView)]
+    public async Task<ActionResult<Response<List<HrEmployeeDto>>>> GetEmployeeHR()
+    {
+        var employees = await hrDbContext.Database
+            .SqlQueryRaw<HrEmployeeDto>(
+                @"SELECT CAST(e.EmpId AS nvarchar(64)) AS EmpId,
+                         ISNULL(e.FirstName, '') AS FirstName,
+                         ISNULL(e.LastName, '') AS LastName,
+                         CAST(e.Status AS int) AS Status
+                  FROM Employee e
+                  WHERE e.Status = 1
+                  ORDER BY e.FirstName")
+            .ToListAsync();
+
+        return Ok(new Response<List<HrEmployeeDto>>
+        {
+            Success = true,
+            Message = "Employees retrieved successfully.",
+            Data = employees
+        });
+    }
 
     [HttpPost("groups")]
     [Authorize(Policy = Permissions.AdminAccessGroupsManage)]

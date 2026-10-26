@@ -15,17 +15,20 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
     private readonly IKraRepository kraRepository;
     private readonly IDivisionRepository divisionRepository;
     private readonly IUnitOfWork unitOfWork;
+    private readonly IUserRepository? userRepository;
 
     public UpdateKpiCommandHandler(
         IKpiRepository _kpiRepository,
         IKraRepository _kraRepository,
         IDivisionRepository _divisionRepository,
-        IUnitOfWork _unitOfWork)
+        IUnitOfWork _unitOfWork,
+        IUserRepository? _userRepository = null)
     {
         kpiRepository = _kpiRepository;
         kraRepository = _kraRepository;
         divisionRepository = _divisionRepository;
         unitOfWork = _unitOfWork;
+        userRepository = _userRepository;
     }
 
     public async Task<Response<KpiDto>> Handle(UpdateKpiCommandRequest request, CancellationToken cancellationToken)
@@ -36,9 +39,20 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
         if (request.KraId.HasValue && request.DivisionGoalId.HasValue)
             throw new BadRequestException("A KPI must belong to exactly one parent: a KRA or a division goal, not both.");
 
+        if (request.OwnerId.HasValue && request.DivisionOwnerId.HasValue)
+            throw new BadRequestException("A KPI can be owned by a user or a division, not both.");
+
         return await unitOfWork.ExecuteInTransactionAsync(async () =>
         {
             var originalWeight = kpi.Weight;
+            Domain.Entities.User? owner = null;
+            if (request.OwnerId.HasValue && userRepository != null)
+            {
+                owner = await userRepository.GetById(request.OwnerId.Value);
+                if (owner == null || !owner.IsActive)
+                    throw new NotFoundException(nameof(Domain.Entities.User), request.OwnerId.Value);
+            }
+
             Domain.Entities.Division? divisionOwner = null;
             if (request.DivisionOwnerId.HasValue)
             {
@@ -58,11 +72,18 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
 
             // Reduce the parent change first so budget/duplicate checks always
             // validate the KPI's final parent, then apply the editable fields.
+            // Choosing a user owner clears a previous division owner and vice versa;
+            // omitting both leaves the current ownership untouched.
             if (request.OwnerId.HasValue)
+            {
                 kpi.OwnerId = request.OwnerId.Value;
-
-            if (request.DivisionOwnerId.HasValue)
+                kpi.DivisionOwnerId = null;
+            }
+            else if (request.DivisionOwnerId.HasValue)
+            {
                 kpi.DivisionOwnerId = request.DivisionOwnerId.Value;
+                kpi.OwnerId = null;
+            }
 
             if (!string.IsNullOrWhiteSpace(request.Name))
                 kpi.Name = request.Name.Trim();
@@ -150,6 +171,7 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
                     KraId = kpi.KraId,
                     DivisionGoalId = kpi.DivisionGoalId,
                     OwnerId = kpi.OwnerId,
+                    OwnerName = owner?.FullName ?? kpi.Owner?.FullName,
                     DivisionOwnerId = kpi.DivisionOwnerId,
                     DivisionOwnerName = divisionOwner?.Name ?? kpi.DivisionOwner?.Name,
                     Name = kpi.Name,

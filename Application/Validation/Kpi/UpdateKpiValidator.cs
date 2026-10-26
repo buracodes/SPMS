@@ -18,5 +18,9 @@ public class UpdateKpiValidator : AbstractValidator<UpdateKpiCommandRequest>
             .GreaterThan(0m).WithMessage("KPI weight must be greater than 0%.")
             .LessThanOrEqualTo(100m).WithMessage("KPI weight cannot exceed 100%.")
             .When(x => x.Weight.HasValue);
+
+        RuleFor(x => x)
+            .Must(x => !(x.OwnerId.HasValue && x.DivisionOwnerId.HasValue))
+            .WithMessage("A KPI can be owned by a user or a division, not both.");
     }
 }

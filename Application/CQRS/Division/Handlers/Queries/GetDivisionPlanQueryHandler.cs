@@ -20,6 +20,7 @@ namespace Application.CQRS.Division.Handlers.Queries
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiTargetRepository kpiTargetRepository;
         private readonly IRagThresholdService ragThresholdService;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public GetDivisionPlanQueryHandler(
             IDivisionRepository _divisionRepository,
@@ -29,8 +30,10 @@ namespace Application.CQRS.Division.Handlers.Queries
             IDivisionPeriodCalculationService _divisionPeriodCalculationService,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiTargetRepository _kpiTargetRepository,
-            IRagThresholdService _ragThresholdService)
+            IRagThresholdService _ragThresholdService,
+            IOrganizationalScopeService _organizationalScope)
         {
+            organizationalScope = _organizationalScope;
             divisionRepository = _divisionRepository;
             scorecardRepository = _scorecardRepository;
             divisionPlanRepository = _divisionPlanRepository;
@@ -43,6 +46,8 @@ namespace Application.CQRS.Division.Handlers.Queries
 
         public async Task<Response<DivisionPlanDto>> Handle(GetDivisionPlanQueryRequest request, CancellationToken cancellationToken)
         {
+            await organizationalScope.EnsureDivisionAsync(request.DivisionId, cancellationToken);
+
             var division = await divisionRepository.GetById(request.DivisionId);
             if (division == null)
             {

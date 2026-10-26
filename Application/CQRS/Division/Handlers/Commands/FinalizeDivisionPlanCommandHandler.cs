@@ -18,14 +18,17 @@ namespace Application.CQRS.Division.Handlers.Commands
         private readonly IDivisionPlanRepository divisionPlanRepository;
         private readonly ICurrentUserService currentUserService;
         private readonly IKpiTargetRepository kpiTargetRepository;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public FinalizeDivisionPlanCommandHandler(
             IDivisionRepository _divisionRepository,
             IScorecardRepository _scorecardRepository,
             IDivisionPlanRepository _divisionPlanRepository,
             ICurrentUserService _currentUserService,
-            IKpiTargetRepository _kpiTargetRepository)
+            IKpiTargetRepository _kpiTargetRepository,
+            IOrganizationalScopeService _organizationalScope)
         {
+            organizationalScope = _organizationalScope;
             divisionRepository = _divisionRepository;
             scorecardRepository = _scorecardRepository;
             divisionPlanRepository = _divisionPlanRepository;
@@ -36,6 +39,8 @@ namespace Application.CQRS.Division.Handlers.Commands
         public async Task<Response<DivisionPlanSummaryDto>> Handle(
             FinalizeDivisionPlanCommandRequest request, CancellationToken cancellationToken)
         {
+            await organizationalScope.EnsureDivisionAsync(request.DivisionId, cancellationToken);
+
             var division = await divisionRepository.GetById(request.DivisionId);
             if (division == null)
             {

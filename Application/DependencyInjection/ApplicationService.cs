@@ -67,9 +67,11 @@ namespace Application.DependencyInjection
             services.AddSingleton<IFiscalPeriodIdentifierFactory, FiscalPeriodIdentifierFactory>();
             services.AddSingleton<IQuarterPeriodsStrategy, QuarterPeriodsStrategy>();
 
+            services.AddScoped<IOrganizationalScopeService, OrganizationalScopeService>();
             services.AddScoped<IRagThresholdService, RagThresholdService>();
             services.AddScoped<IReportingService, ReportingService>();
             services.AddScoped<IDivisionReportService, DivisionReportService>();
+            services.AddScoped<IPerformanceMonitoringService, PerformanceMonitoringService>();
             services.AddScoped<IRoleDashboardService, RoleDashboardService>();
 
             // Projects initiatives/milestones into DTOs using the authoritative calculators.
