@@ -30,12 +30,6 @@ namespace Infrastructure.Persistence.Repositories
 
             string LDAP_Path = "LDAP://ecx.com/DC=ecx,DC=com";
 
-
-
-            //string adAdminUser = "APPSA";
-
-            //string adAdminPass = "09Solecx";
-
             if (string.IsNullOrEmpty(_domain) || string.IsNullOrEmpty(LDAP_Path))
 
                 return AdAuthenticationResult.Failed;
