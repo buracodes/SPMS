@@ -18,7 +18,6 @@ namespace Application.Tests.Dashboard;
 
 public class RoleDashboardServiceTests
 {
-    private const string Password = "P@ssw0rd!";
 
     /// <summary>Mirrors the permission set the seeder grants the executive role.</summary>
     private static readonly string[] ExecutivePermissions =
@@ -128,7 +127,6 @@ public class RoleDashboardServiceTests
             Email = email ?? $"{id:N}@spms.et",
             Username = email ?? $"{id:N}@spms.et",
             FullName = "KPI Owner",
-            PasswordHash = Password,
             IsActive = true
         });
 
@@ -199,7 +197,6 @@ public class RoleDashboardServiceTests
             Email = email,
             Username = email,
             FullName = fullName,
-            PasswordHash = Password,
             IsActive = true
         };
 

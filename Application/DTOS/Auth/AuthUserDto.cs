@@ -11,6 +11,7 @@ namespace Application.DTOS.Auth
         public string FullName { get; set; } = string.Empty;
         public string? Email { get; set; }
         public Guid? DivisionId { get; set; }
+
         public IReadOnlyList<string> Roles { get; set; } = Array.Empty<string>();
         public IReadOnlyList<string> Permissions { get; set; } = Array.Empty<string>();
     }

@@ -526,6 +526,64 @@ public class DivisionPlanMutationHandlerTests
     }
 
     [Fact]
+    public async Task DeleteDivisionKpi_WithRecordedActuals_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        var goalId = await CreateGoalWithKpiAsync(lease, fixture);
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.DivisionGoalId == goalId);
+
+        // Legacy/manual data can leave a draft plan with recorded actuals; deletion must
+        // still preserve the history even though the normal API cannot produce that state.
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = fixture.PeriodId,
+            Value = 4,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = DateTime.UtcNow
+        });
+        await lease.Context.SaveChangesAsync();
+
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            CreateDeleteKpiHandler(lease).Handle(
+                new DeleteDivisionKpiCommandRequest { DivisionKpiId = kpi.Id }, CancellationToken.None));
+
+        Assert.Contains("actual performance data", ex.Message);
+        Assert.False(await lease.Context.Kpis.IgnoreQueryFilters().AnyAsync(k => k.Id == kpi.Id && k.IsDeleted));
+    }
+
+    [Fact]
+    public async Task DeleteDivisionGoal_WithRecordedActuals_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        var goalId = await CreateGoalWithKpiAsync(lease, fixture);
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.DivisionGoalId == goalId);
+
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = fixture.PeriodId,
+            Value = 4,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = DateTime.UtcNow
+        });
+        await lease.Context.SaveChangesAsync();
+
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            CreateDeleteGoalHandler(lease).Handle(
+                new DeleteDivisionGoalCommandRequest { DivisionGoalId = goalId }, CancellationToken.None));
+
+        Assert.Contains("actual performance data", ex.Message);
+        Assert.False(await lease.Context.DivisionGoals.IgnoreQueryFilters().AnyAsync(g => g.Id == goalId && g.IsDeleted));
+    }
+
+    [Fact]
     public async Task DeleteDivisionKpi_FinalizedPlan_ThrowsBadRequest()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
@@ -632,7 +690,8 @@ public class DivisionPlanMutationHandlerTests
 
         var scopeWithoutCrossDivisionVisibility = new TestOrganizationalScopeService
         {
-            HasCorporateAccess = false
+            HasCorporateAccess = false,
+            HasDivisionPortfolioAccess = false
         };
 
         await Assert.ThrowsAsync<ForbiddenException>(() =>
@@ -959,6 +1018,53 @@ public class DivisionPlanMutationHandlerTests
                 DivisionId = divisionId,
                 ScorecardId = fixture.ScorecardId
             }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task FinalizeDivisionPlan_GoalWithoutKpis_ThrowsBadRequestNamingTheGoal()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+
+        var first = await CreateDivisionGoalHandler(lease).Handle(new CreateDivisionGoalCommandRequest
+        {
+            DivisionId = divisionId,
+            ScorecardId = fixture.ScorecardId,
+            ParentGoalId = fixture.GoalAId,
+            Name = "Expand Retail Network",
+            Weight = 50
+        }, CancellationToken.None);
+
+        await CreateDivisionKpiHandler(lease).Handle(new CreateDivisionKpiCommandRequest
+        {
+            DivisionId = divisionId,
+            ScorecardId = fixture.ScorecardId,
+            DivisionGoalId = first.Data!.Id,
+            Name = "New Branches",
+            Weight = 100,
+            IsCumulative = true,
+            Targets = await BuildReconciledTargetsAsync(lease, fixture.FiscalYearId)
+        }, CancellationToken.None);
+
+        await CreateDivisionGoalHandler(lease).Handle(new CreateDivisionGoalCommandRequest
+        {
+            DivisionId = divisionId,
+            ScorecardId = fixture.ScorecardId,
+            ParentGoalId = fixture.GoalAId,
+            Name = "Boost Digital Sales",
+            Weight = 50
+        }, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            CreateFinalizeHandler(lease).Handle(new FinalizeDivisionPlanCommandRequest
+            {
+                DivisionId = divisionId,
+                ScorecardId = fixture.ScorecardId
+            }, CancellationToken.None));
+
+        Assert.Contains("Boost Digital Sales", ex.Message);
+        Assert.Equal(DivisionPlanStatus.Draft, (await lease.Context.DivisionPlans.SingleAsync()).PlanStatus);
     }
 
     [Fact]

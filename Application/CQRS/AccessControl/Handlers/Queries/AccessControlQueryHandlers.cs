@@ -156,7 +156,6 @@ public class AccessControlQueryHandlers :
             u.Email,
             u.FullName,
             u.IsActive,
-            u.LastLoginAtUtc,
             u.DivisionId,
             u.Division?.Name,
             u.UserRoles
@@ -196,7 +195,6 @@ public class AccessControlQueryHandlers :
             user.IsActive,
             user.DivisionId,
             user.Division?.Name,
-            user.LastLoginAtUtc,
             user.UserRoles
                 .Where(ur => ur.Role != null && !ur.IsDeleted && ur.Status == Domain.Enums.EntityStatus.Active)
                 .Select(ur => ur.Role.Name)
@@ -228,7 +226,8 @@ public class AccessControlQueryHandlers :
                     ur.Role.Name,
                     ur.CreatedDate,
                     nameByUser.TryGetValue(ur.CreatedBy, out var by) ? by : null)))
-            .Where(m => request.GroupId == null || m.RoleId == request.GroupId)
+            .Where(m => (request.GroupId == null || m.RoleId == request.GroupId)
+                     && (request.UserId == null || m.UserId == request.UserId))
             .OrderBy(m => m.RoleName)
             .ThenBy(m => m.FullName)
             .ToList();
@@ -253,7 +252,7 @@ public class AccessControlQueryHandlers :
         var nameByUser = users.ToDictionary(u => u.Id, u => u.FullName);
 
         var rows = role.RolePermissions
-            .Where(rp => rp.Permission != null)
+            .Where(rp => rp.Permission != null && !rp.IsDeleted && rp.Status == Domain.Enums.EntityStatus.Active)
             .Select(rp => new GroupRightRowDto(
                 rp.RoleId,
                 rp.PermissionId,

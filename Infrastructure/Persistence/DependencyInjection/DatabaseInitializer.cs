@@ -1,4 +1,3 @@
-using Application.Interface.IService;
 using Infrastructure.Persistence.Context;
 using Infrastructure.Persistence.Seed;
 using Microsoft.EntityFrameworkCore;
@@ -12,7 +11,7 @@ namespace Infrastructure.Persistence.DependencyInjection
 {
     public static class DatabaseInitializer
     {
-        public static async Task InitializeDatabaseAsync(this IServiceProvider services, bool seedTemporaryData = false)
+        public static async Task InitializeDatabaseAsync(this IServiceProvider services)
         {
             using var scope = services.CreateScope();
 
@@ -20,11 +19,7 @@ namespace Infrastructure.Persistence.DependencyInjection
             var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(DatabaseInitializer));
 
             await context.Database.MigrateAsync();
-
-            var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
-            var defaultAdmin = scope.ServiceProvider.GetRequiredService<DefaultAdminOptions>();
-
-            await SpmsDbSeeder.SeedAsync(context, passwordHasher, defaultAdmin, seedTemporaryData);
+            await SpmsDbSeeder.SeedAsync(context);
 
             logger.LogInformation("Database initialized and seeded successfully.");
         }

@@ -27,11 +27,11 @@ namespace Application.CQRS.Division.Handlers.Queries
         {
             var divisions = await divisionRepository.GetActiveAsync();
 
-            // Division accounts only discover their own division; corporate monitoring
-            // accounts keep the full list. Corporate visibility is resolved once from the
-            // live authorization state rather than per division.
-            var hasCorporateAccess = await organizationalScope.HasCorporateAccessAsync(cancellationToken);
-            if (!hasCorporateAccess)
+            // Division accounts only discover their own division; corporate and read-only
+            // corporate accounts (View Only) keep the full list. Portfolio visibility is
+            // resolved once from the live authorization state rather than per division.
+            var hasPortfolioAccess = await organizationalScope.HasDivisionPortfolioAccessAsync(cancellationToken);
+            if (!hasPortfolioAccess)
             {
                 var divisionId = organizationalScope.DivisionId;
                 divisions = divisionId.HasValue

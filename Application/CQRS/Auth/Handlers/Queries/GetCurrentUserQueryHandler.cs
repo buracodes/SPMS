@@ -15,13 +15,16 @@ namespace Application.CQRS.Auth.Handlers.Queries
     {
         private readonly ICurrentUserService currentUserService;
         private readonly IUserRepository userRepository;
+        private readonly IEffectivePermissionService effectivePermissionService;
 
         public GetCurrentUserQueryHandler(
             ICurrentUserService _currentUserService,
-            IUserRepository _userRepository)
+            IUserRepository _userRepository,
+            IEffectivePermissionService _effectivePermissionService)
         {
             currentUserService = _currentUserService;
             userRepository = _userRepository;
+            effectivePermissionService = _effectivePermissionService;
         }
 
         public async Task<Response<AuthUserDto>> Handle(GetCurrentUserQueryRequest request, CancellationToken cancellationToken)
@@ -39,15 +42,15 @@ namespace Application.CQRS.Auth.Handlers.Queries
             }
 
             var roles = user.UserRoles
+                .Where(ur => ur.Role != null && !ur.IsDeleted && ur.Status == Domain.Enums.EntityStatus.Active)
                 .Select(ur => ur.Role.Name)
                 .Distinct()
                 .ToList();
 
-            var permissions = user.UserRoles
-                .SelectMany(ur => ur.Role.RolePermissions)
-                .Select(rp => rp.Permission.Name)
-                .Distinct()
-                .ToList();
+            // Effective rights, not the union of every role right: denies, direct grants and
+            // position grants must be reflected here exactly as they are at login.
+            var effectivePermissions = await effectivePermissionService.GetEffectiveGrantNamesAsync(user.Id, cancellationToken);
+            var permissions = effectivePermissions.ToList();
 
             return new Response<AuthUserDto>
             {

@@ -1,10 +1,9 @@
-using Application.CQRS.Auth.Requests.Commands;
 using Application.DTOS.User;
 using Application.Interface.IRepository;
 using Application.Responses;
+using Application.Services;
 using Asp.Versioning;
 using Domain.Constants;
-using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -16,12 +15,12 @@ namespace API.Controllers;
 public class UserController : ControllerBase
 {
     private readonly IUserRepository userRepository;
-    private readonly IMediator mediator;
+    private readonly IHRInfoRepository hrInfoRepository;
 
-    public UserController(IUserRepository _userRepository, IMediator _mediator)
+    public UserController(IUserRepository _userRepository, IHRInfoRepository _hrInfoRepository)
     {
         userRepository = _userRepository;
-        mediator = _mediator;
+        hrInfoRepository = _hrInfoRepository;
     }
 
     [HttpGet]
@@ -49,16 +48,39 @@ public class UserController : ControllerBase
     }
 
     /// <summary>
-    /// Active users available as KPI owners. Deliberately readable with only kpi:view so
-    /// the KPI owner picker works for planners who cannot administer users.
+    /// Active employees available as KPI owners, sourced from HR so an employee can own a KPI
+    /// before their first SPMS sign-in. EmpId is the AD objectGUID and therefore the stable local
+    /// user id. Deliberately readable with only kpi:view so planners who cannot administer users
+    /// can still pick an owner.
     /// </summary>
     [HttpGet("lookup")]
     [Authorize(Policy = Permissions.KpiView)]
-    public async Task<ActionResult<Response<List<UserDto>>>> Lookup()
+    public async Task<ActionResult<Response<List<UserDto>>>> Lookup(
+        [FromQuery] string? search,
+        CancellationToken cancellationToken)
     {
-        var users = await userRepository.GetAllWithRolesAndDivisionAsync();
-        var dtos = users.Where(u => u.IsActive).Select(ToDto).ToList();
-        return Ok(new Response<List<UserDto>> { Success = true, Message = "Users retrieved successfully.", Data = dtos });
+        var employees = await hrInfoRepository.GetActiveEmployeesAsync(search, 1000, cancellationToken);
+        var dtos = employees
+            .Where(employee => employee.EmpId.HasValue)
+            .Select(employee => new UserDto
+            {
+                Id = employee.EmpId!.Value,
+                Username = EmployeeNaming.UsernameHint(employee),
+                Email = employee.Email,
+                FullName = EmployeeNaming.DisplayName(employee),
+                IsActive = true,
+                DivisionId = employee.DivisionId,
+                DivisionName = employee.DivisionName,
+                Roles = new List<string>()
+            })
+            .ToList();
+
+        return Ok(new Response<List<UserDto>>
+        {
+            Success = true,
+            Message = "Employees retrieved successfully.",
+            Data = dtos
+        });
     }
 
     private static UserDto ToDto(Domain.Entities.User u) => new()
@@ -68,25 +90,8 @@ public class UserController : ControllerBase
         Email = u.Email,
         FullName = u.FullName,
         IsActive = u.IsActive,
-        LastLoginAtUtc = u.LastLoginAtUtc,
         DivisionId = u.DivisionId,
         DivisionName = u.Division?.Name,
         Roles = u.UserRoles.Select(ur => ur.Role.Name).ToList()
     };
-
-    [HttpPost("change-password")]
-    [Authorize]
-    public async Task<ActionResult<Response<bool>>> ChangePassword([FromBody] ChangePasswordCommandRequest request)
-    {
-        var result = await mediator.Send(request);
-        return Ok(result);
-    }
-
-    [HttpPost("divisions/reset-password")]
-    [Authorize(Policy = Permissions.AdminUsersManage)]
-    public async Task<ActionResult<Response<bool>>> ResetDivisionPassword([FromBody] ResetDivisionPasswordCommandRequest request)
-    {
-        var result = await mediator.Send(request);
-        return Ok(result);
-    }
 }

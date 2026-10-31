@@ -23,6 +23,9 @@ public class DivisionGoalConfiguration : IEntityTypeConfiguration<DivisionGoal>
             .HasForeignKey(g => g.ParentGoalId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasIndex(g => new { g.DivisionPlanId, g.Name }).IsUnique();
+        // Soft-deleted goals must not block reusing a name inside the same plan.
+        builder.HasIndex(g => new { g.DivisionPlanId, g.Name })
+            .IsUnique()
+            .HasFilter("[IsDeleted] = 0");
     }
 }

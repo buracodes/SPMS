@@ -27,7 +27,7 @@ namespace Application.Validation.Division
                 .When(x => x.Formula != null);
 
             RuleFor(x => x.Weight)
-                .GreaterThanOrEqualTo(0).WithMessage("Weight cannot be negative.")
+                .GreaterThan(0).WithMessage("Weight must be greater than 0.")
                 .LessThanOrEqualTo(100).WithMessage("Weight cannot exceed 100%.")
                 .When(x => x.Weight.HasValue);
 

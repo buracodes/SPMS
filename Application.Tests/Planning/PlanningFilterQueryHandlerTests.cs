@@ -185,6 +185,64 @@ public class PlanningFilterQueryHandlerTests
     }
 
     [Fact]
+    public async Task KpiList_ResolvesAndFiltersDivisionKpisThroughTheirParentCorporateGoal()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var plan = await SeedAsync(lease);
+
+        var division = new Division { Id = Guid.NewGuid(), Name = "Retail", Code = "RET" };
+        var divisionPlan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = division.Id,
+            ScorecardId = plan.Corporate2025.Id,
+            PlanStatus = DivisionPlanStatus.Draft
+        };
+        var divisionGoal = new DivisionGoal
+        {
+            Id = Guid.NewGuid(),
+            DivisionPlanId = divisionPlan.Id,
+            ParentGoalId = plan.GoalA.Id,
+            Name = "Retail network",
+            Weight = 100
+        };
+        lease.Context.Divisions.Add(division);
+        lease.Context.DivisionPlans.Add(divisionPlan);
+        lease.Context.DivisionGoals.Add(divisionGoal);
+        await lease.Context.SaveChangesAsync();
+
+        var divisionKpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = plan.Corporate2025.Id,
+            DivisionGoalId = divisionGoal.Id,
+            DivisionOwnerId = division.Id,
+            Name = "Branches opened",
+            Weight = 100,
+            OptimizationType = KpiOptimizationType.Maximize,
+            KpiType = KpiType.Lagging,
+            DataSource = KpiDataSource.Manual
+        };
+        lease.Context.Kpis.Add(divisionKpi);
+        lease.Context.Kpis.Add(Kpi(plan.Corporate2025, "Under goal B", plan.KraB.Id));
+        await lease.Context.SaveChangesAsync();
+
+        var all = await KpiHandler(lease).Handle(new GetAllKpiQueryRequest(), CancellationToken.None);
+        var row = Assert.Single(all.Data!, k => k.Id == divisionKpi.Id);
+        Assert.Null(row.KraId);
+        Assert.Null(row.KraName);
+        Assert.Equal(plan.GoalA.Id, row.GoalId);
+        Assert.Equal("Grow revenue", row.GoalName);
+        Assert.Equal(division.Id, row.DivisionOwnerId);
+        Assert.Equal("Retail", row.DivisionOwnerName);
+
+        var byGoal = await KpiHandler(lease)
+            .Handle(new GetAllKpiQueryRequest { GoalId = plan.GoalA.Id }, CancellationToken.None);
+        Assert.Contains(byGoal.Data!, k => k.Id == divisionKpi.Id);
+        Assert.DoesNotContain(byGoal.Data!, k => k.Name == "Under goal B");
+    }
+
+    [Fact]
     public async Task KpiList_CombinesFiscalYearGoalAndKraFilters()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();

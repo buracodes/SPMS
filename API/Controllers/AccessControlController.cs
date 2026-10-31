@@ -1,18 +1,18 @@
 using Application.CQRS.AccessControl.Requests.Commands;
 using Application.CQRS.AccessControl.Requests.Queries;
 using Application.DTOS.AccessControl;
+using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
 using Asp.Versioning;
 using Domain.Constants;
 using Domain.Entities;
-using Infrastructure.Persistence.Context;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace API.Controllers;
 
@@ -35,13 +35,13 @@ public class AccessControlController : ControllerBase
 {
     private readonly IMediator mediator;
     private readonly IEffectivePermissionService effectivePermissions;
-    private readonly hrDbContext hrDbContext;
+    private readonly IHRInfoRepository hrInfoRepository;
 
-    public AccessControlController(IMediator _mediator, IEffectivePermissionService _effectivePermissions, hrDbContext _hrDbContext)
+    public AccessControlController(IMediator _mediator, IEffectivePermissionService _effectivePermissions, IHRInfoRepository _hrInfoRepository)
     {
         mediator = _mediator;
         effectivePermissions = _effectivePermissions;
-        hrDbContext = _hrDbContext;
+        hrInfoRepository = _hrInfoRepository;
     }
 
     // ── Reads ──────────────────────────────────────────────────────────────
@@ -73,9 +73,9 @@ public class AccessControlController : ControllerBase
     [HttpGet("memberships")]
     [Authorize(Policy = Permissions.AdminAccessView)]
     public async Task<ActionResult<Response<List<Application.CQRS.AccessControl.GroupMembershipRowDto>>>> GetMemberships(
-        [FromQuery] Guid? groupId)
+        [FromQuery] Guid? groupId, [FromQuery] Guid? userId)
     {
-        var result = await mediator.Send(new GetGroupMembershipQueryRequest { GroupId = groupId });
+        var result = await mediator.Send(new GetGroupMembershipQueryRequest { GroupId = groupId, UserId = userId });
         return Ok(result);
     }
 
@@ -130,26 +130,20 @@ public class AccessControlController : ControllerBase
     // ── Groups (groups capability) ─────────────────────────────────────────
 
     /// <summary>
-    /// Active employees from the external HR database, used by the employee pickers.
-    /// The HR schema is outside the SPMS model, so the query projects into
-    /// <see cref="HrEmployeeDto"/> and casts EmpId/Status to stable CLR types.
+    /// Active employees from the external HR database, used by the member and user-right
+    /// pickers. This is the assignable population, not the local Users table: an employee can
+    /// be granted access before their first SPMS sign-in. EmpId is the AD objectGUID.
     /// </summary>
-    [HttpGet("getEmployeeHR")]
+    [HttpGet("employees")]
     [Authorize(Policy = Permissions.AdminAccessView)]
-    public async Task<ActionResult<Response<List<HrEmployeeDto>>>> GetEmployeeHR()
+    public async Task<ActionResult<Response<List<EmployeeHRInfoDto>>>> GetEmployees(
+        [FromQuery] string? search,
+        [FromQuery] int? take = 200,
+        CancellationToken cancellationToken = default)
     {
-        var employees = await hrDbContext.Database
-            .SqlQueryRaw<HrEmployeeDto>(
-                @"SELECT CAST(e.EmpId AS nvarchar(64)) AS EmpId,
-                         ISNULL(e.FirstName, '') AS FirstName,
-                         ISNULL(e.LastName, '') AS LastName,
-                         CAST(e.Status AS int) AS Status
-                  FROM Employee e
-                  WHERE e.Status = 1
-                  ORDER BY e.FirstName")
-            .ToListAsync();
+        var employees = await hrInfoRepository.GetActiveEmployeesAsync(search, take, cancellationToken);
 
-        return Ok(new Response<List<HrEmployeeDto>>
+        return Ok(new Response<List<EmployeeHRInfoDto>>
         {
             Success = true,
             Message = "Employees retrieved successfully.",

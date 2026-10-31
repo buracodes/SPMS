@@ -3,7 +3,9 @@ using Application.DTOS.Kpi;
 using Application.Exceptions;
 using Application.Interface;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
+using Application.Services;
 using MediatR;
 using KpiEntity = Domain.Entities.Kpi;
 
@@ -16,19 +18,25 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
     private readonly IDivisionRepository divisionRepository;
     private readonly IUnitOfWork unitOfWork;
     private readonly IUserRepository? userRepository;
+    private readonly IHRInfoRepository? hrInfoRepository;
+    private readonly ICurrentUserService? currentUserService;
 
     public UpdateKpiCommandHandler(
         IKpiRepository _kpiRepository,
         IKraRepository _kraRepository,
         IDivisionRepository _divisionRepository,
         IUnitOfWork _unitOfWork,
-        IUserRepository? _userRepository = null)
+        IUserRepository? _userRepository = null,
+        IHRInfoRepository? _hrInfoRepository = null,
+        ICurrentUserService? _currentUserService = null)
     {
         kpiRepository = _kpiRepository;
         kraRepository = _kraRepository;
         divisionRepository = _divisionRepository;
         unitOfWork = _unitOfWork;
         userRepository = _userRepository;
+        hrInfoRepository = _hrInfoRepository;
+        currentUserService = _currentUserService;
     }
 
     public async Task<Response<KpiDto>> Handle(UpdateKpiCommandRequest request, CancellationToken cancellationToken)
@@ -48,9 +56,7 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
             Domain.Entities.User? owner = null;
             if (request.OwnerId.HasValue && userRepository != null)
             {
-                owner = await userRepository.GetById(request.OwnerId.Value);
-                if (owner == null || !owner.IsActive)
-                    throw new NotFoundException(nameof(Domain.Entities.User), request.OwnerId.Value);
+                owner = await ResolveOwnerAsync(request.OwnerId.Value, cancellationToken);
             }
 
             Domain.Entities.Division? divisionOwner = null;
@@ -198,5 +204,34 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
                 }
             };
         });
+    }
+
+    /// <summary>
+    /// KPI owners are picked from HR. An employee who has never signed in has no local row yet,
+    /// so it is created from the verified HR/AD identity mapping before the KPI is saved.
+    /// </summary>
+    private async Task<Domain.Entities.User> ResolveOwnerAsync(Guid ownerId, CancellationToken cancellationToken)
+    {
+        var owner = await userRepository!.GetById(ownerId);
+        if (owner == null && hrInfoRepository != null && currentUserService != null)
+        {
+            var employee = await hrInfoRepository.FindActiveEmployeeByIdAsync(ownerId, cancellationToken);
+            if (employee != null)
+            {
+                owner = await userRepository.EnsureEmployeeAccountAsync(
+                    ownerId,
+                    EmployeeNaming.DisplayName(employee),
+                    EmployeeNaming.UsernameHint(employee),
+                    currentUserService.UserId ?? Guid.Empty,
+                    cancellationToken);
+            }
+        }
+
+        if (owner == null || !owner.IsActive)
+        {
+            throw new NotFoundException(nameof(Domain.Entities.User), ownerId);
+        }
+
+        return owner;
     }
 }

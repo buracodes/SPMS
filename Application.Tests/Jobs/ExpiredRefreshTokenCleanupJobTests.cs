@@ -22,7 +22,6 @@ public class ExpiredRefreshTokenCleanupJobTests
             Id = Guid.NewGuid(),
             Username = "token-user",
             FullName = "Token User",
-            PasswordHash = "hash"
         };
 
         lease.Context.Users.Add(user);

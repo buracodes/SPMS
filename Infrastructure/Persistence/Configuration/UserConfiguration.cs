@@ -18,7 +18,6 @@ namespace Infrastructure.Persistence.Configuration
             builder.HasIndex(u => u.Email).IsUnique().HasFilter("[Email] IS NOT NULL");
 
             builder.Property(u => u.FullName).HasMaxLength(200).IsRequired();
-            builder.Property(u => u.PasswordHash).HasMaxLength(500).IsRequired();
 
             builder.HasOne(u => u.Division)
                 .WithMany()

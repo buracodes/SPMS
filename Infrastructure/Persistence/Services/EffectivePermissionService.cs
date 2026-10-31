@@ -17,7 +17,8 @@ namespace Infrastructure.Persistence.Services;
 /// (capability assignment tables) on every evaluation so administrative changes take
 /// effect immediately; caching is intentionally avoided because the identity set is small
 /// and each check is a request-bounded SQL read — <see cref="IEffectivePermissionService.InvalidateAllAsync"/>
-/// is kept as the seam for a future cache.
+/// is kept as the seam for a future cache. The only cached input is the opt-in HR position
+/// lookup, which sits behind a short TTL inside <see cref="HrPositionPermissionProvider"/>.
 ///
 /// Precedence, per right:
 ///   1. unauthenticated or deactivated identity          → default deny
@@ -25,7 +26,8 @@ namespace Infrastructure.Persistence.Services;
 ///   3. explicit group-level deny (any of user's groups)  → deny  (group assignment)
 ///   4. direct user-level grant                           → grant (direct assignment)
 ///   5. group-level grant                                 → grant (group assignment)
-///   6. no applicable grant                               → default deny
+///   6. optional HR position-level grant                  → grant (position assignment)
+///   7. no applicable grant                               → default deny
 /// </summary>
 public class EffectivePermissionService : IEffectivePermissionService
 {
@@ -34,10 +36,12 @@ public class EffectivePermissionService : IEffectivePermissionService
     private const string ResultDenied = "Denied";
 
     private readonly SpmsDbContext context;
+    private readonly IPositionPermissionProvider positionPermissions;
 
-    public EffectivePermissionService(SpmsDbContext context)
+    public EffectivePermissionService(SpmsDbContext context, IPositionPermissionProvider positionPermissions)
     {
         this.context = context;
+        this.positionPermissions = positionPermissions;
     }
 
     public void InvalidateAllAsync()
@@ -61,9 +65,11 @@ public class EffectivePermissionService : IEffectivePermissionService
             return new HashSet<string>();
         }
 
+        var positionGrants = await positionPermissions.GetGrantedPermissionsAsync(state.User!.Id, cancellationToken);
         var knownNames = CollectPermissionNames(state);
+        knownNames.UnionWith(positionGrants);
         return new HashSet<string>(
-            knownNames.Where(name => Evaluate(name, state)?.Result == AccessResult.Granted));
+            knownNames.Where(name => Evaluate(name, state, positionGrants)?.Result == AccessResult.Granted));
     }
 
     public async Task<bool> HasPermissionAsync(Guid userId, string permission, CancellationToken cancellationToken = default)
@@ -89,6 +95,9 @@ public class EffectivePermissionService : IEffectivePermissionService
         }
 
         var identityActive = IsIdentityActive(state.User);
+        var positionGrants = identityActive
+            ? await positionPermissions.GetGrantedPermissionsAsync(state.User!.Id, cancellationToken)
+            : (IReadOnlySet<string>)new HashSet<string>();
         var groupNames = state.Memberships
             .Select(m => m.Role?.Name)
             .Where(n => !string.IsNullOrWhiteSpace(n))
@@ -101,7 +110,7 @@ public class EffectivePermissionService : IEffectivePermissionService
         foreach (var permission in catalog)
         {
             entries.Add(identityActive
-                ? Describe(permission, Evaluate(permission.Name, state))
+                ? Describe(permission, Evaluate(permission.Name, state, positionGrants))
                 : Describe(permission, null));
         }
 
@@ -159,7 +168,10 @@ public class EffectivePermissionService : IEffectivePermissionService
         user != null && !user.IsDeleted && user.Status == EntityStatus.Active && user.IsActive;
 
     /// <summary>The single precedence evaluation, applied to every consumer.</summary>
-    private static Decision? Evaluate(string permissionName, AuthorizationState state)
+    private static Decision? Evaluate(
+        string permissionName,
+        AuthorizationState state,
+        IReadOnlySet<string> positionGrants)
     {
         bool directDeny = false, groupDeny = false, directGrant = false, groupGrant = false;
 
@@ -231,6 +243,12 @@ public class EffectivePermissionService : IEffectivePermissionService
                 "Granted through one of the user's access groups.");
         }
 
+        if (positionGrants.Contains(permissionName))
+        {
+            return new Decision(AccessResult.Granted, AccessSource.PositionAssignment, false,
+                "Granted through the user's HR position level mapping.");
+        }
+
         return null; // default deny
     }
 
@@ -248,6 +266,7 @@ public class EffectivePermissionService : IEffectivePermissionService
     {
         AccessSource.DirectUserAssignment => "Direct User Assignment",
         AccessSource.GroupAssignment => "Group Assignment",
+        AccessSource.PositionAssignment => "Position Assignment",
         _ => "Default Deny"
     };
 

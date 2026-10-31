@@ -33,18 +33,18 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
     {
         if (request is EnterActualValueCommandRequest command && command.Dto != null)
         {
-            await AuthorizeActualValueWriteAsync(command.Dto.KpiId, command.Dto.FiscalPeriodId, command.Dto.OverrideReason);
+            await AuthorizeActualValueWriteAsync(command.Dto.KpiId, command.Dto.FiscalPeriodId, command.Dto.OverrideReason, allowDivisionOwnership: false);
         }
 
         if (request is EnterDivisionActualValueCommandRequest divisionCommand && divisionCommand.Dto != null)
         {
-            await AuthorizeActualValueWriteAsync(divisionCommand.Dto.KpiId, divisionCommand.Dto.FiscalPeriodId, divisionCommand.Dto.OverrideReason);
+            await AuthorizeActualValueWriteAsync(divisionCommand.Dto.KpiId, divisionCommand.Dto.FiscalPeriodId, divisionCommand.Dto.OverrideReason, allowDivisionOwnership: true);
         }
 
         return await next();
     }
 
-    private async Task AuthorizeActualValueWriteAsync(Guid kpiId, Guid fiscalPeriodId, string? overrideReason)
+    private async Task AuthorizeActualValueWriteAsync(Guid kpiId, Guid fiscalPeriodId, string? overrideReason, bool allowDivisionOwnership)
     {
         var kpi = await kpiRepository.GetByIdWithScorecardAsync(kpiId);
         if (kpi == null || kpi.Scorecard == null)
@@ -54,6 +54,14 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
 
         var currentUserId = currentUserService.UserId;
         var isKpiOwner = currentUserId.HasValue && kpi.OwnerId.HasValue && kpi.OwnerId.Value == currentUserId.Value;
+        // FR-906: division KPIs are owned by a division, not an individual user, so the
+        // division account must be accepted as the owner during the open window. An
+        // unassigned division KPI (DivisionOwnerId is optional) falls through to the
+        // handler, which verifies the KPI belongs to the caller's own division plan.
+        var isDivisionOwner = allowDivisionOwnership
+            && currentUserService.DivisionId.HasValue
+            && (kpi.DivisionOwnerId == currentUserService.DivisionId
+                || (kpi.DivisionOwnerId == null && kpi.DivisionGoalId.HasValue));
         var canOverride = currentUserService.Permissions.Contains(Permissions.ActualsOverride);
 
         // Closed fiscal year / scorecard (FR-703): read-only unless an audited
@@ -87,14 +95,14 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
         // If period is open, only KPI owner (or override users) can enter
         if (status.State == PeriodLockState.Open)
         {
-            if (isKpiOwner || canOverride)
+            if (isKpiOwner || isDivisionOwner || canOverride)
             {
                 return;
             }
             throw new PeriodLockedException(
                 kpi.ScorecardId,
                 fiscalPeriodId,
-                "Only the KPI owner can enter actual values during the open entry window.");
+                "Only the KPI owner or a user from the owning division can enter actual values during the open entry window.");
         }
 
         // Period is locked or not yet open - requires override permission

@@ -390,7 +390,7 @@ public class KpiActualHandlerTests
         var owner = Guid.NewGuid();
         var callerDivision = new Division { Id = Guid.NewGuid(), Name = "Sales", Code = "SAL" };
         lease.Context.Divisions.Add(callerDivision);
-        lease.Context.Users.Add(new User { Id = owner, Username = "kpi.owner", FullName = "Kpi Owner", PasswordHash = "hash", DivisionId = callerDivision.Id });
+        lease.Context.Users.Add(new User { Id = owner, Username = "kpi.owner", FullName = "Kpi Owner", DivisionId = callerDivision.Id });
         var kpi = await lease.Context.Kpis.FirstAsync(k => k.Id == kpiId);
         kpi.OwnerId = owner;
         await lease.Context.SaveChangesAsync();

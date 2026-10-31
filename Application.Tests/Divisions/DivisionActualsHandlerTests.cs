@@ -76,7 +76,6 @@ public class DivisionActualsHandlerTests
             Id = Guid.NewGuid(),
             Username = "it",
             FullName = "IT Division Account",
-            PasswordHash = "hash",
             DivisionId = divisionA.Id
         };
         var corporateUser = new User
@@ -84,7 +83,6 @@ public class DivisionActualsHandlerTests
             Id = Guid.NewGuid(),
             Username = "planner",
             FullName = "Corporate Planner",
-            PasswordHash = "hash"
         };
 
         lease.Context.FiscalYears.Add(year);
@@ -167,6 +165,33 @@ public class DivisionActualsHandlerTests
         Assert.True(response.Success);
         Assert.Equal(5, response.Data!.Value);
         Assert.Equal(1, await lease.Context.KpiActualValues.CountAsync());
+    }
+
+    [Fact]
+    public async Task EnterValue_DraftPlan_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+        var plan = await lease.Context.DivisionPlans.SingleAsync();
+        plan.PlanStatus = DivisionPlanStatus.Draft;
+        await lease.Context.SaveChangesAsync();
+
+        var handler = CreateEnterHandler(lease, new TestCurrentUserService { UserId = fixture.CorporateUserId });
+
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            handler.Handle(new EnterDivisionActualValueCommandRequest
+            {
+                Dto = new EnterDivisionActualValueDto
+                {
+                    DivisionId = fixture.DivisionAId,
+                    KpiId = fixture.KpiId,
+                    FiscalPeriodId = fixture.PeriodId,
+                    Value = 5
+                }
+            }, CancellationToken.None));
+
+        Assert.Contains("draft", ex.Message);
+        Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
     }
 
     [Fact]

@@ -25,13 +25,14 @@ public class SetAccessGroupStatusCommandRequest : IRequest<Response<AccessGroupD
 
 public class AccessGroupWriteDto
 {
-    /// <summary>Immutable technical key of the access group — matches Role.Name.</summary>
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
 }
 
 public class AccessGroupUpdateDto
 {
+    /// <summary>Optional rename; protected system groups keep their fixed name.</summary>
+    public string? Name { get; set; }
     public string? Description { get; set; }
 }
 

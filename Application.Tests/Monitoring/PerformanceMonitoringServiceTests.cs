@@ -18,7 +18,6 @@ namespace Application.Tests.Monitoring;
 /// </summary>
 public class PerformanceMonitoringServiceTests
 {
-    private const string Password = "P@ssw0rd!";
 
     private static PerformanceMonitoringService CreateService(
         TestDbContextLease lease,
@@ -121,7 +120,6 @@ public class PerformanceMonitoringServiceTests
             Email = $"{Guid.NewGuid():N}@spms.et",
             Username = $"{Guid.NewGuid():N}@spms.et",
             FullName = fullName,
-            PasswordHash = Password,
             IsActive = true
         };
         lease.Context.Users.Add(user);

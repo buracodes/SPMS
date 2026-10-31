@@ -125,6 +125,13 @@ namespace Application.CQRS.Division.Handlers.Commands
                 throw new BadRequestException("Add at least one division KPI before finalizing this plan.");
             }
 
+            var goalWithoutKpis = plan.Goals.FirstOrDefault(g => g.Kpis.Count == 0);
+            if (goalWithoutKpis != null)
+            {
+                throw new BadRequestException(
+                    $"Add at least one KPI to the division goal '{goalWithoutKpis.Name}' before finalizing this plan.");
+            }
+
             var incompleteKpiWeightGoal = plan.Goals.FirstOrDefault(
                 g => g.Kpis.Count > 0 && Math.Abs(g.Kpis.Sum(k => k.Weight) - RequiredTotalWeight) > WeightEpsilon);
             if (incompleteKpiWeightGoal != null)
@@ -154,7 +161,7 @@ namespace Application.CQRS.Division.Handlers.Commands
             if (untargetedKpiNames.Count > 0)
             {
                 throw new BadRequestException(
-                    $"Every division KPI must have targets before finalizing. Missing targets for: {string.Join(", ", untargetedKpiNames)}. Open each KPI and enter its annual (and quarterly/monthly, where applicable) targets.");
+                    $"Every division KPI must have targets before finalizing. Missing targets for: {string.Join(", ", untargetedKpiNames)}. Configure them on the Targets page, then finalize the plan.");
             }
         }
     }

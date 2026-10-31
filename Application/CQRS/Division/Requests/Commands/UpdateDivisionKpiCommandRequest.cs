@@ -9,8 +9,6 @@ namespace Application.CQRS.Division.Requests.Commands
     {
         public Guid DivisionKpiId { get; set; }
 
-        public Guid? OwnerId { get; set; }
-        public Guid? DivisionOwnerId { get; set; }
         public Guid? UnitOfMeasureId { get; set; }
         public string? Name { get; set; }
         public string? Description { get; set; }

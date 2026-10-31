@@ -11,8 +11,6 @@ namespace Application.CQRS.Division.Requests.Commands
         public Guid ScorecardId { get; set; }
         public Guid DivisionGoalId { get; set; }
 
-        public Guid? OwnerId { get; set; }
-        public Guid? DivisionOwnerId { get; set; }
         public Guid? UnitOfMeasureId { get; set; }
         public required string Name { get; set; }
         public string? Description { get; set; }

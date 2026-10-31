@@ -13,7 +13,8 @@ namespace Application.Tests.Reports;
 
 public class ReportingServiceTests
 {
-    private static ReportingService CreateService(TestDbContextLease lease)
+    private static ReportingService CreateService(
+        TestDbContextLease lease, IOrganizationalScopeService? organizationalScope = null)
     {
         return new ReportingService(
             new ScorecardRepository(lease.Context),
@@ -38,9 +39,10 @@ public class ReportingServiceTests
                 new FiscalPeriodRepository(lease.Context),
                 new KpiTargetRepository(lease.Context),
                 new KpiActualValueRepository(lease.Context),
-                new DivisionScoreSnapshotRepository(lease.Context)),
+                new KpiScoreSnapshotRepository(lease.Context)),
             new InitiativeProgressCalculator(),
-            new TestRagThresholdService());
+            new TestRagThresholdService(),
+            organizationalScope ?? new TestOrganizationalScopeService());
     }
 
     private static FiscalYear CreateYear(TestDbContextLease lease)
@@ -62,7 +64,7 @@ public class ReportingServiceTests
             new FiscalPeriodRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
-            new DivisionScoreSnapshotRepository(lease.Context));
+            new KpiScoreSnapshotRepository(lease.Context));
 
     private static async Task<(Guid ScorecardId, Guid GoalId, Guid KraId, Guid KpiId, Guid Month1, Guid Month2)> SeedAsync(
         TestDbContextLease lease, FiscalYear year)
@@ -430,5 +432,301 @@ public class ReportingServiceTests
 
         var marchRow = report.Single(r => r.FiscalMonth == 3);
         Assert.Equal(5m, marchRow.TargetValue);
+    }
+
+    [Fact]
+    public async Task DivisionReport_UsesPerKpiSnapshotScore_NotParentGoalSnapshot()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = CreateYear(lease);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
+        var division = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
+        var plan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = division.Id,
+            ScorecardId = scorecard.Id,
+            PlanStatus = DivisionPlanStatus.Finalized
+        };
+        var divisionGoal = new DivisionGoal
+        {
+            Id = Guid.NewGuid(),
+            DivisionPlanId = plan.Id,
+            ParentGoalId = goal.Id,
+            Name = "Expand Retail Network",
+            Weight = 100
+        };
+        var branches = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            DivisionGoalId = divisionGoal.Id,
+            Name = "New Branches",
+            Weight = 60,
+            IsActive = true
+        };
+        var uptime = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            DivisionGoalId = divisionGoal.Id,
+            Name = "Branch Uptime",
+            Weight = 40,
+            IsActive = true
+        };
+        var january = lease.Context.FiscalPeriods.Local.Single(p => p.FiscalMonth == 1);
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Divisions.Add(division);
+        lease.Context.DivisionPlans.Add(plan);
+        lease.Context.DivisionGoals.Add(divisionGoal);
+        lease.Context.Kpis.AddRange(branches, uptime);
+        lease.Context.DivisionScoreSnapshots.Add(new DivisionScoreSnapshot
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            DivisionId = division.Id,
+            DivisionGoalId = divisionGoal.Id,
+            FiscalPeriodId = january.Id,
+            Granularity = SnapshotGranularity.Month,
+            Score = 90m,
+            CalculatedAt = DateTime.UtcNow
+        });
+        lease.Context.KpiScoreSnapshots.AddRange(
+            new KpiScoreSnapshot
+            {
+                Id = Guid.NewGuid(),
+                ScorecardId = scorecard.Id,
+                KpiId = branches.Id,
+                FiscalPeriodId = january.Id,
+                Granularity = SnapshotGranularity.Month,
+                Score = 80m,
+                CalculatedAt = DateTime.UtcNow
+            },
+            new KpiScoreSnapshot
+            {
+                Id = Guid.NewGuid(),
+                ScorecardId = scorecard.Id,
+                KpiId = uptime.Id,
+                FiscalPeriodId = january.Id,
+                Granularity = SnapshotGranularity.Month,
+                Score = 40m,
+                CalculatedAt = DateTime.UtcNow
+            });
+        await lease.Context.SaveChangesAsync();
+
+        var report = await CreateDivisionReportService(lease)
+            .GetDivisionReportAsync(division.Id, scorecard.Id, year.Id);
+
+        Assert.Equal(80m, report.Single(r => r.KpiName == "New Branches" && r.FiscalMonth == 1).Score);
+        Assert.Equal(40m, report.Single(r => r.KpiName == "Branch Uptime" && r.FiscalMonth == 1).Score);
+    }
+
+    [Fact]
+    public async Task DivisionReport_IncludesDivisionGoalAndCorporateGoalAlignment()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = CreateYear(lease);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
+        var division = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
+        var plan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = division.Id,
+            ScorecardId = scorecard.Id,
+            PlanStatus = DivisionPlanStatus.Finalized
+        };
+        var divisionGoal = new DivisionGoal
+        {
+            Id = Guid.NewGuid(),
+            DivisionPlanId = plan.Id,
+            ParentGoalId = goal.Id,
+            Name = "Expand Retail Network",
+            Weight = 100
+        };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            DivisionGoalId = divisionGoal.Id,
+            Name = "New Branches",
+            Weight = 100,
+            IsActive = true
+        };
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Divisions.Add(division);
+        lease.Context.DivisionPlans.Add(plan);
+        lease.Context.DivisionGoals.Add(divisionGoal);
+        lease.Context.Kpis.Add(kpi);
+        await lease.Context.SaveChangesAsync();
+
+        var report = await CreateDivisionReportService(lease)
+            .GetDivisionReportAsync(division.Id, scorecard.Id, year.Id);
+
+        Assert.Equal(12, report.Count);
+        Assert.All(report, r => Assert.Equal("Expand Retail Network", r.GoalName));
+        Assert.All(report, r => Assert.Equal("Grow Revenue", r.CorporateGoalName));
+    }
+
+    [Fact]
+    public async Task DivisionReports_BatchesRequestedDivisionsWithoutLeakingSiblings()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = CreateYear(lease);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
+        var retail = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
+        var trade = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Trade Operations", Code = "TRO" };
+        var unrequested = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Corporate Services", Code = "CSV" };
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Divisions.AddRange(retail, trade, unrequested);
+
+        void SeedDivision(Domain.Entities.Division division, string goalName, string kpiName)
+        {
+            var plan = new DivisionPlan
+            {
+                Id = Guid.NewGuid(),
+                DivisionId = division.Id,
+                ScorecardId = scorecard.Id,
+                PlanStatus = DivisionPlanStatus.Finalized
+            };
+            var divisionGoal = new DivisionGoal
+            {
+                Id = Guid.NewGuid(),
+                DivisionPlanId = plan.Id,
+                ParentGoalId = goal.Id,
+                Name = goalName,
+                Weight = 100
+            };
+            var kpi = new Kpi
+            {
+                Id = Guid.NewGuid(),
+                ScorecardId = scorecard.Id,
+                DivisionGoalId = divisionGoal.Id,
+                Name = kpiName,
+                Weight = 100,
+                IsActive = true
+            };
+            lease.Context.DivisionPlans.Add(plan);
+            lease.Context.DivisionGoals.Add(divisionGoal);
+            lease.Context.Kpis.Add(kpi);
+        }
+
+        SeedDivision(retail, "Expand Retail Network", "New Branches");
+        SeedDivision(trade, "Grow Trade Volume", "Trade Orders");
+        SeedDivision(unrequested, "Corporate Services Goal", "Service Requests");
+        await lease.Context.SaveChangesAsync();
+
+        var report = await CreateDivisionReportService(lease)
+            .GetDivisionReportsAsync(new[] { retail.Id, trade.Id }, scorecard.Id, year.Id);
+
+        // Twelve fiscal periods for each of the two requested divisions.
+        Assert.Equal(24, report.Count);
+        Assert.Equal(new[] { "New Branches" }, report.Where(r => r.DivisionId == retail.Id).Select(r => r.KpiName).Distinct());
+        Assert.Equal(new[] { "Trade Orders" }, report.Where(r => r.DivisionId == trade.Id).Select(r => r.KpiName).Distinct());
+        Assert.DoesNotContain(report, r => r.DivisionId == unrequested.Id);
+    }
+
+    [Fact]
+    public async Task DivisionPerformanceReport_IncludesAlignmentAndRestrictsDivisionAccountsToTheirOwnDivision()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = CreateYear(lease);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
+        var retail = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
+        var trade = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Trade Operations", Code = "TRO" };
+        var january = lease.Context.FiscalPeriods.Local.Single(p => p.FiscalMonth == 1);
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Divisions.AddRange(retail, trade);
+
+        void SeedDivision(Domain.Entities.Division division, string goalName, string kpiName, decimal score)
+        {
+            var plan = new DivisionPlan
+            {
+                Id = Guid.NewGuid(),
+                DivisionId = division.Id,
+                ScorecardId = scorecard.Id,
+                PlanStatus = DivisionPlanStatus.Finalized
+            };
+            var divisionGoal = new DivisionGoal
+            {
+                Id = Guid.NewGuid(),
+                DivisionPlanId = plan.Id,
+                ParentGoalId = goal.Id,
+                Name = goalName,
+                Weight = 100
+            };
+            var kpi = new Kpi
+            {
+                Id = Guid.NewGuid(),
+                ScorecardId = scorecard.Id,
+                DivisionGoalId = divisionGoal.Id,
+                Name = kpiName,
+                Weight = 100,
+                IsActive = true
+            };
+            lease.Context.DivisionPlans.Add(plan);
+            lease.Context.DivisionGoals.Add(divisionGoal);
+            lease.Context.Kpis.Add(kpi);
+            lease.Context.KpiScoreSnapshots.Add(new KpiScoreSnapshot
+            {
+                Id = Guid.NewGuid(),
+                ScorecardId = scorecard.Id,
+                KpiId = kpi.Id,
+                FiscalPeriodId = january.Id,
+                Granularity = SnapshotGranularity.Month,
+                Score = score,
+                CalculatedAt = DateTime.UtcNow
+            });
+        }
+
+        SeedDivision(retail, "Expand Retail Network", "New Branches", 90m);
+        SeedDivision(trade, "Grow Trade Volume", "Trade Orders", 60m);
+        await lease.Context.SaveChangesAsync();
+
+        var scope = new TestOrganizationalScopeService
+        {
+            DivisionId = retail.Id,
+            HasDivisionPortfolioAccess = false
+        };
+
+        var report = await CreateService(lease, scope).GenerateAsync(new ReportFilter
+        {
+            ReportType = "division-performance",
+            ScorecardId = scorecard.Id,
+            FiscalYearId = year.Id,
+            Granularity = "month",
+            FromMonth = 1,
+            ToMonth = 1
+        }, cancellationToken: CancellationToken.None);
+
+        Assert.Equal(
+            new[] { "Division", "Division Goal", "Corporate Goal", "KPI", "Fiscal Month", "Quarter", "Target", "Actual", "Score", "RAG", "Weight %", "Unit", "Cumulative" },
+            report.Columns);
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal("Retail Operations", row[0]);
+        Assert.Equal("Expand Retail Network", row[1]);
+        Assert.Equal("Grow Revenue", row[2]);
+        Assert.Equal("New Branches", row[3]);
+        Assert.Equal("M1", row[4]);
+        Assert.Equal("90", row[8]);
+
+        Assert.Contains("Retail Operations (KPI avg)", report.Summary.Keys);
+        Assert.DoesNotContain("Trade Operations (KPI avg)", report.Summary.Keys);
     }
 }

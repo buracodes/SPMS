@@ -28,6 +28,7 @@ public class KpiRepository : GenericRepository<Kpi>, IKpiRepository
             .Include(k => k.Owner)
             .Include(k => k.DivisionOwner)
             .Include(k => k.UnitOfMeasure)
+            .Include(k => k.DivisionGoal)
             .ToListAsync();
     }
 

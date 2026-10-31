@@ -1,3 +1,4 @@
+using Application.DTOS.Auth;
 using Application.Interface.IRepository;
 using DocumentFormat.OpenXml.Spreadsheet;
 using Domain.Entities;
@@ -22,7 +23,7 @@ namespace Infrastructure.Persistence.Repositories
             this.configuration = configuration;
         }
 
-        public User AuthenticateToAD(string userName, string pwd)
+        public AdAuthenticationResult AuthenticateToAD(string userName, string pwd)
         {
 
             string _domain = "ecx.com";
@@ -35,19 +36,9 @@ namespace Infrastructure.Persistence.Repositories
 
             //string adAdminPass = "09Solecx";
 
-            User authenticatedUser;
-
             if (string.IsNullOrEmpty(_domain) || string.IsNullOrEmpty(LDAP_Path))
 
-                return new User
-                {
-                    IsAuthenticated = false,
-                    Username = string.Empty,
-                    FullName = string.Empty,
-                    PasswordHash = string.Empty,
-                };
-
-            string domainAndUsername = _domain + "\\" + userName;
+                return AdAuthenticationResult.Failed;
 
             try
             {
@@ -64,89 +55,45 @@ namespace Infrastructure.Persistence.Repositories
                     search.PropertiesToLoad.Add("distinguishedName");
 
                     SearchResultCollection results = search.FindAll();
-                    if (results == null || results.Count == 0)
+                    if (results == null || results.Count != 1)
                     {
-                        return new User
-                        {
-                            IsAuthenticated = false,
-                            Username = string.Empty,
-                            FullName = string.Empty,
-                            PasswordHash = string.Empty,
-                        };
+                        results?.Dispose();
+                        return AdAuthenticationResult.Failed;
                     }
-                    if (results.Count > 1)
+
+                    SearchResult result = results[0];
+                    if (result == null)
                     {
                         results.Dispose();
-                        return new User
-                        {
-                            IsAuthenticated = false,
-                            Username = string.Empty,
-                            FullName = string.Empty,
-                            PasswordHash = string.Empty,
-                        };
-                    }
-                    SearchResult result = results[0];
-                    if (result != null)
-                    {
-                        string distinguishedName = result.Properties["distinguishedName"][0].ToString();
-                        System.DirectoryServices.DirectoryEntry userADEntry = result.GetDirectoryEntry();
-                        authenticatedUser = new User
-                        {
-                            IsAuthenticated = true,
-                            Id = userADEntry.Guid,
-                            FullName = userADEntry.Username,
-                            Email = userADEntry.Username + "@ecx.com.et",
-                            Username = userADEntry.Properties["CN"][0].ToString(),
-                            PasswordHash = string.Empty
-
-                        };
+                        return AdAuthenticationResult.Failed;
                     }
 
-                    else
-                    {
+                    var commonName = result.Properties["CN"];
+                    string? displayName = commonName.Count > 0 ? commonName[0]?.ToString() : null;
 
-                        return new User
-                        {
-                            IsAuthenticated = false,
-                            Username = string.Empty,
-                            FullName = string.Empty,
-                            PasswordHash = string.Empty,
-                        };
-
-                    }
+                    System.DirectoryServices.DirectoryEntry userADEntry = result.GetDirectoryEntry();
+                    var authenticatedUser = new AdAuthenticationResult(
+                        true,
+                        userADEntry.Guid,
+                        userName,
+                        string.IsNullOrWhiteSpace(displayName) ? userName : displayName,
+                        userName + "@ecx.com.et");
 
                     entry.Close();
 
                     return authenticatedUser;
-
                 }
 
                 #endregion
 
             }
 
-            catch (Exception ex)
+            catch (Exception)
 
             {
-
-                return new User
-                {
-                    IsAuthenticated = false,
-                    Username = string.Empty,
-                    FullName = string.Empty,
-                    PasswordHash = string.Empty,
-                };
-
+                return AdAuthenticationResult.Failed;
             }
         }
-
-        private static User FailedLogin(string username) => new()
-        {
-            IsAuthenticated = false,
-            Username = username,
-            FullName = string.Empty,
-            PasswordHash = string.Empty
-        };
 
         public async Task<User?> GetByUsernameAsync(string username)
         {
@@ -195,6 +142,123 @@ namespace Infrastructure.Persistence.Repositories
                 .Include(u => u.Division)
                 .OrderBy(u => u.FullName)
                 .ToListAsync();
+        }
+
+        public async Task<User?> ProvisionAdUserAsync(
+            Guid userId,
+            string username,
+            string fullName,
+            string? email,
+            string? roleName = null,
+            CancellationToken cancellationToken = default)
+        {
+            var role = string.IsNullOrWhiteSpace(roleName)
+                ? null
+                : await context.Roles.FirstOrDefaultAsync(r => r.Name == roleName, cancellationToken)
+                    ?? throw new InvalidOperationException(
+                        $"The provisioning role '{roleName}' does not exist. Seed the role before provisioning.");
+
+            var user = new User
+            {
+                Id = userId,
+                Username = username,
+                FullName = string.IsNullOrWhiteSpace(fullName) ? username : fullName,
+                Email = email,
+                IsActive = true
+            };
+
+            UserRole? membership = null;
+            if (role != null)
+            {
+                membership = new UserRole { UserId = userId, RoleId = role.Id };
+                user.UserRoles.Add(membership);
+            }
+
+            context.Users.Add(user);
+            await context.SaveChangesAsync(cancellationToken);
+
+            // The reload is no-tracking, so leaving the provisioning graph attached makes the caller's
+            // Update() attach a second instance with the same key and throw. The role is reached through
+            // UserRole.Role, so it has to be detached as well.
+            context.Entry(user).State = EntityState.Detached;
+            if (membership != null)
+            {
+                context.Entry(membership).State = EntityState.Detached;
+            }
+            if (role != null)
+            {
+                context.Entry(role).State = EntityState.Detached;
+            }
+
+            return await GetByIdWithRolesAndPermissionsAsync(userId);
+        }
+
+        public Task<Guid?> GetDivisionIdAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            return context.Users
+                .Where(u => u.Id == userId)
+                .Select(u => u.DivisionId)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Returns the local account for an HR employee, creating a shadow row keyed on the AD object
+        /// GUID when the employee has never signed in. Access can be granted before first login; that
+        /// sign-in resolves the same row by GUID, so no username or email matching is involved.
+        /// </summary>
+        public async Task<User> EnsureEmployeeAccountAsync(
+            Guid userId,
+            string fullName,
+            string usernameHint,
+            Guid actor,
+            CancellationToken cancellationToken = default)
+        {
+            var existing = await context.Users
+                .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
+            if (existing != null)
+            {
+                return existing;
+            }
+
+            var user = new User
+            {
+                Id = userId,
+                Username = await BuildUniqueUsernameAsync(usernameHint, userId, cancellationToken),
+                FullName = string.IsNullOrWhiteSpace(fullName) ? userId.ToString() : fullName,
+                // Left empty on purpose: HR addresses are inconsistent, and the real address is
+                // recorded from AD at the employee's first sign-in.
+                Email = null,
+                IsActive = true,
+                Status = Domain.Enums.EntityStatus.Active,
+                CreatedBy = actor,
+                CreatedDate = DateTime.UtcNow
+            };
+
+            await context.Users.AddAsync(user, cancellationToken);
+            await context.SaveChangesAsync(cancellationToken);
+
+            return user;
+        }
+
+        private async Task<string> BuildUniqueUsernameAsync(string hint, Guid userId, CancellationToken cancellationToken)
+        {
+            var baseName = string.IsNullOrWhiteSpace(hint) ? $"hr-{userId:N}" : hint.Trim();
+            if (baseName.Length > 90)
+            {
+                baseName = baseName[..90];
+            }
+
+            // Soft-deleted rows still occupy the unfiltered unique index, so ignore the query filter.
+            var taken = await context.Users
+                .IgnoreQueryFilters()
+                .AnyAsync(u => u.Username == baseName, cancellationToken);
+            if (!taken)
+            {
+                return baseName;
+            }
+
+            var unique = $"{baseName}-{userId.ToString("N")[..6]}";
+            return unique.Length <= 100 ? unique : unique[..100];
         }
     }
 }

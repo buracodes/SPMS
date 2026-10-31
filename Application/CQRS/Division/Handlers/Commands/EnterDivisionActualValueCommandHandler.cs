@@ -6,6 +6,7 @@ using Application.Interface.IService;
 using Application.Jobs;
 using Application.Responses;
 using Domain.Entities;
+using Domain.Enums;
 using MediatR;
 
 namespace Application.CQRS.Division.Handlers.Commands;
@@ -73,6 +74,12 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
         if (divisionPlan == null)
         {
             throw new BadRequestException("No division plan exists for this division and scorecard.");
+        }
+
+        if (divisionPlan.PlanStatus == DivisionPlanStatus.Draft)
+        {
+            throw new BadRequestException(
+                "This division plan is still a draft. Finalize it before entering actual values.");
         }
 
         // FR-906: never trust the division id in the payload. The KPI must actually

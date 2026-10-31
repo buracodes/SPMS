@@ -19,17 +19,20 @@ namespace Application.CQRS.Auth.Handlers.Commands
         private readonly IUserRepository userRepository;
         private readonly ITokenService tokenService;
         private readonly SecurityOptions securityOptions;
+        private readonly IEffectivePermissionService effectivePermissionService;
 
         public RefreshTokenCommandHandler(
             IRefreshTokenRepository _refreshTokenRepository,
             IUserRepository _userRepository,
             ITokenService _tokenService,
-            SecurityOptions _securityOptions)
+            SecurityOptions _securityOptions,
+            IEffectivePermissionService _effectivePermissionService)
         {
             refreshTokenRepository = _refreshTokenRepository;
             userRepository = _userRepository;
             tokenService = _tokenService;
             securityOptions = _securityOptions;
+            effectivePermissionService = _effectivePermissionService;
         }
 
         public async Task<Response<TokenResponseDto>> Handle(RefreshTokenCommandRequest request, CancellationToken cancellationToken)
@@ -72,17 +75,15 @@ namespace Application.CQRS.Auth.Handlers.Commands
             await refreshTokenRepository.AddAsync(newRefresh);
 
             var roles = user.UserRoles
+                .Where(ur => ur.Role != null && !ur.IsDeleted && ur.Status == Domain.Enums.EntityStatus.Active)
                 .Select(ur => ur.Role.Name)
                 .Distinct()
                 .ToList();
 
-            var permissions = user.UserRoles
-                .SelectMany(ur => ur.Role.RolePermissions)
-                .Select(rp => rp.Permission.Name)
-                .Distinct()
-                .ToList();
+            var effectivePermissions = await effectivePermissionService.GetEffectiveGrantNamesAsync(user.Id, cancellationToken);
+            var permissions = effectivePermissions.ToList();
 
-            var accessToken = tokenService.CreateAccessToken(user.Id, user.Username, user.FullName, roles, permissions, user.DivisionId);
+            var accessToken = tokenService.CreateAccessToken(user.Id, user.Username, roles, permissions);
 
             return new Response<TokenResponseDto>
             {

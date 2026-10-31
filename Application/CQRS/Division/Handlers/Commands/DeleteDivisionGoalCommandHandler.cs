@@ -46,6 +46,9 @@ namespace Application.CQRS.Division.Handlers.Commands
                 .Select(k => k.Id)
                 .ToList();
 
+            if (kpiIds.Count > 0 && await kpiRepository.HasAnyActualDataAsync(kpiIds))
+                throw new BadRequestException("Cannot delete a division goal whose KPIs have recorded actual performance data. Historical actual values must be preserved.");
+
             // Soft-delete the goal and its KPIs in a single SaveChanges so a failure can
             // never leave a half-deleted goal (previously one save happened per KPI).
             var now = DateTime.UtcNow;

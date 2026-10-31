@@ -80,66 +80,64 @@ namespace Application.CQRS.Division.Handlers.Commands
                 throw new BadRequestException($"A division KPI named '{request.Name.Trim()}' already exists under this goal.");
             }
 
-            if (request.DivisionOwnerId.HasValue)
-            {
-                var ownerDivision = await divisionRepository.GetById(request.DivisionOwnerId.Value);
-                if (ownerDivision == null)
-                {
-                    throw new NotFoundException(nameof(Domain.Entities.Division), request.DivisionOwnerId.Value);
-                }
-            }
-
-            var currentWeightSum = await kpiRepository.GetDivisionKpiWeightsSumAsync(divisionGoal.Id);
-            if (currentWeightSum + request.Weight > 100m)
-            {
-                throw new BadRequestException(
-                    $"Adding this KPI would bring the total KPI weight under the goal to {currentWeightSum + request.Weight:F2}% which exceeds 100%. Adjust the weight or existing KPIs.");
-            }
-
             var validPeriods = await fiscalPeriodRepository.GetByFiscalYearAsync(scorecard.FiscalYearId);
 
-            var kpi = new Domain.Entities.Kpi
+            // ADR-009: the KPI weight budget is checked with the insert in one serializable
+            // transaction, so two concurrent creates under the same goal cannot jointly
+            // exceed 100% (mirrors the corporate KPI create handler).
+            return await unitOfWork.ExecuteInTransactionAsync(async () =>
             {
-                Id = Guid.NewGuid(),
-                ScorecardId = scorecard.Id,
-                KraId = null,
-                DivisionGoalId = divisionGoal.Id,
-                OwnerId = request.OwnerId,
-                DivisionOwnerId = request.DivisionOwnerId,
-                UnitOfMeasureId = request.UnitOfMeasureId,
-                Name = request.Name.Trim(),
-                Description = request.Description,
-                Unit = request.Unit,
-                Weight = request.Weight,
-                ToleranceBandPercent = request.ToleranceBandPercent,
-                OptimizationType = request.OptimizationType,
-                DataSource = request.DataSource,
-                KpiType = request.KpiType,
-                IsCumulative = request.IsCumulative,
-                Baseline = request.Baseline ?? request.MinValue,
-                MinValue = request.MinValue,
-                MaxValue = request.MaxValue,
-                Formula = request.Formula,
-                IsActive = true
-            };
+                var currentWeightSum = await kpiRepository.GetDivisionKpiWeightsSumAsync(divisionGoal.Id);
+                if (currentWeightSum + request.Weight > 100m)
+                {
+                    throw new BadRequestException(
+                        $"Adding this KPI would bring the total KPI weight under the goal to {currentWeightSum + request.Weight:F2}% which exceeds 100%. Adjust the weight or existing KPIs.");
+                }
 
-            await unitOfWork.AddRangeAsync(new[] { kpi }, cancellationToken);
+                var kpi = new Domain.Entities.Kpi
+                {
+                    Id = Guid.NewGuid(),
+                    ScorecardId = scorecard.Id,
+                    KraId = null,
+                    DivisionGoalId = divisionGoal.Id,
+                    // A division KPI is owned by the plan's division; there is no separate owner picker.
+                    OwnerId = null,
+                    DivisionOwnerId = division.Id,
+                    UnitOfMeasureId = request.UnitOfMeasureId,
+                    Name = request.Name.Trim(),
+                    Description = request.Description,
+                    Unit = request.Unit,
+                    Weight = request.Weight,
+                    ToleranceBandPercent = request.ToleranceBandPercent,
+                    OptimizationType = request.OptimizationType,
+                    DataSource = request.DataSource,
+                    KpiType = request.KpiType,
+                    IsCumulative = request.IsCumulative,
+                    Baseline = request.Baseline ?? request.MinValue,
+                    MinValue = request.MinValue,
+                    MaxValue = request.MaxValue,
+                    Formula = request.Formula,
+                    IsActive = true
+                };
 
-            var targets = DivisionKpiTargetBuilder.Build(
-                kpi.Id, kpi.IsCumulative, request.Targets, validPeriods);
-            if (targets.Count > 0)
-            {
-                await unitOfWork.AddRangeAsync(targets, cancellationToken);
-            }
+                await unitOfWork.AddRangeAsync(new[] { kpi }, cancellationToken);
 
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+                var targets = DivisionKpiTargetBuilder.Build(
+                    kpi.Id, kpi.IsCumulative, request.Targets, validPeriods);
+                if (targets.Count > 0)
+                {
+                    await unitOfWork.AddRangeAsync(targets, cancellationToken);
+                }
 
-            return new Response<DivisionKpiDto>
-            {
-                Success = true,
-                Message = "Division KPI created successfully.",
-                Data = DivisionPlanDtoFactory.BuildKpi(kpi)
-            };
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+
+                return new Response<DivisionKpiDto>
+                {
+                    Success = true,
+                    Message = "Division KPI created successfully.",
+                    Data = DivisionPlanDtoFactory.BuildKpi(kpi)
+                };
+            }, cancellationToken);
         }
     }
 }

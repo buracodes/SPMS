@@ -14,9 +14,13 @@ internal sealed class TestOrganizationalScopeService : IOrganizationalScopeServi
     public Guid? UserId { get; set; }
     public Guid? DivisionId { get; set; }
     public bool HasCorporateAccess { get; set; } = true;
+    public bool HasDivisionPortfolioAccess { get; set; } = true;
 
     public Task<bool> HasCorporateAccessAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(HasCorporateAccess);
+
+    public Task<bool> HasDivisionPortfolioAccessAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(HasDivisionPortfolioAccess);
 
     public Task<bool> CanAccessDivisionAsync(Guid divisionId, CancellationToken cancellationToken = default)
         => Task.FromResult(HasCorporateAccess || (DivisionId.HasValue && DivisionId.Value == divisionId));

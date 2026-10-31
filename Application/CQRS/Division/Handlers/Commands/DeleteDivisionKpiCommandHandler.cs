@@ -42,6 +42,9 @@ namespace Application.CQRS.Division.Handlers.Commands
                     throw new BadRequestException("Division KPIs cannot be deleted once the plan has been finalized or locked.");
             }
 
+            if (await kpiRepository.HasAnyActualDataAsync(new[] { kpi.Id }))
+                throw new BadRequestException("Cannot delete a division KPI that has recorded actual performance data. Historical actual values must be preserved.");
+
             await kpiRepository.Delete(kpi);
             return true;
         }

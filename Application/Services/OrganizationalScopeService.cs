@@ -42,6 +42,37 @@ public class OrganizationalScopeService : IOrganizationalScopeService
             cancellationToken);
     }
 
+    public async Task<bool> HasDivisionPortfolioAccessAsync(CancellationToken cancellationToken = default)
+    {
+        var userId = currentUserService.UserId;
+        if (!userId.HasValue || userId.Value == Guid.Empty)
+        {
+            return false;
+        }
+
+        // The division claim is authoritative and always wins: division accounts only ever
+        // see their own division, even if a broad read permission is also granted.
+        if (DivisionId.HasValue)
+        {
+            return false;
+        }
+
+        if (await effectivePermissions.HasPermissionAsync(
+                userId.Value,
+                Permissions.PerformanceMonitorView,
+                cancellationToken))
+        {
+            return true;
+        }
+
+        // FR-908 / Module 9 matrix: View Only roles can select a division and read the
+        // corporate goals of its plan without holding performance:monitor.view.
+        return await effectivePermissions.HasPermissionAsync(
+            userId.Value,
+            Permissions.DivisionView,
+            cancellationToken);
+    }
+
     public async Task<bool> CanAccessDivisionAsync(Guid divisionId, CancellationToken cancellationToken = default)
     {
         // The division claim is the cheapest and most specific check, so try it first and
@@ -51,7 +82,7 @@ public class OrganizationalScopeService : IOrganizationalScopeService
             return true;
         }
 
-        return await HasCorporateAccessAsync(cancellationToken);
+        return await HasDivisionPortfolioAccessAsync(cancellationToken);
     }
 
     public async Task EnsureDivisionAsync(Guid divisionId, CancellationToken cancellationToken = default)

@@ -24,22 +24,14 @@ namespace Infrastructure.Service
         public AccessTokenResult CreateAccessToken(
             Guid userId,
             string username,
-            string fullName,
             IReadOnlyList<string> roles,
-            IReadOnlyList<string> permissions,
-            Guid? divisionId = null)
+            IReadOnlyList<string> permissions)
         {
             var claims = new List<Claim>
             {
                 new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
-                new Claim(ClaimTypes.Name, username),
-                new Claim("fullName", fullName)
+                new Claim(ClaimTypes.Name, username)
             };
-
-            if (divisionId.HasValue)
-            {
-                claims.Add(new Claim("division", divisionId.Value.ToString()));
-            }
 
             foreach (var role in roles)
             {

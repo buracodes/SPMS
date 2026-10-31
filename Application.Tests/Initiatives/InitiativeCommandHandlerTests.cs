@@ -42,7 +42,6 @@ public class InitiativeCommandHandlerTests
             Id = Guid.NewGuid(),
             Username = $"user-{suffix[..10]}",
             FullName = fullName,
-            PasswordHash = "HASH",
             Email = $"{suffix}@spms.local",
             IsActive = true,
             CreatedDate = DateTime.UtcNow

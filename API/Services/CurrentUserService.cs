@@ -24,6 +24,10 @@ namespace API.Services
 
         public string? UserName => httpContextAccessor.HttpContext?.User?.Identity?.Name;
 
+        /// <summary>
+        /// Current division assignment. Tokens no longer carry it; <see cref="UserClaimsTransformation"/>
+        /// adds it from the database on every request so a transfer takes effect immediately.
+        /// </summary>
         public Guid? DivisionId
         {
             get

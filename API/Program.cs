@@ -14,6 +14,7 @@ using Infrastructure.Options;
 using Infrastructure.Persistence.Context;
 using Infrastructure.Persistence.DependencyInjection;
 using Infrastructure.Persistence.Seed;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -48,10 +49,6 @@ var securityOptions = new SecurityOptions();
 builder.Configuration.GetSection(SecurityOptions.SectionName).Bind(securityOptions);
 builder.Services.AddSingleton(securityOptions);
 
-var defaultAdmin = new DefaultAdminOptions();
-builder.Configuration.GetSection(DefaultAdminOptions.SectionName).Bind(defaultAdmin);
-builder.Services.AddSingleton(defaultAdmin);
-
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -69,6 +66,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
+builder.Services.AddScoped<IClaimsTransformation, UserClaimsTransformation>();
 builder.Services.AddAuthorization(options =>
 {
     foreach (var permission in Permissions.All)
@@ -188,7 +186,7 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-await app.Services.InitializeDatabaseAsync(app.Environment.IsDevelopment());
+await app.Services.InitializeDatabaseAsync();
 
 app.Services.RegisterRecurringJobs();
 

@@ -148,22 +148,11 @@ namespace Infrastructure.Persistence.Context
         }
     }
 
+    /// <summary>Read-only window onto the external HR database, queried through Database.SqlQueryRaw. No SPMS entity may be mapped here, or SPMS tables would point at the HR server.</summary>
     public class hrDbContext : DbContext
     {
         public hrDbContext(DbContextOptions<hrDbContext> options) : base(options)
         {
-        }
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-            foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
-            {
-                foreignKey.DeleteBehavior = DeleteBehavior.Restrict;
-            }
-            modelBuilder.ApplyConfigurationsFromAssembly(
-               typeof(hrDbContext).Assembly);
-
         }
     }
 }

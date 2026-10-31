@@ -114,14 +114,6 @@ namespace Infrastructure.Persistence.Repositories
             return adminIds;
         }
 
-        public async Task<IReadOnlyList<string>> GetRoleGrantedPermissionNamesAsync(Guid roleId, CancellationToken cancellationToken = default)
-        {
-            return await context.RolePermissions.IgnoreQueryFilters()
-                .Where(rp => rp.RoleId == roleId && rp.Effect == Domain.Enums.PermissionEffect.Grant)
-                .Select(rp => rp.Permission.Name)
-                .ToListAsync(cancellationToken);
-        }
-
         /// <summary>
         /// The management keys both of which (effective, deny-aware) define the administrator set.
         /// </summary>

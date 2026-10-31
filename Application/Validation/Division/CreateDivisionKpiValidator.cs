@@ -20,7 +20,7 @@ namespace Application.Validation.Division
             RuleFor(x => x.Formula).MaximumLength(500).WithMessage("Formula must be 500 characters or fewer.");
 
             RuleFor(x => x.Weight)
-                .GreaterThanOrEqualTo(0).WithMessage("Weight cannot be negative.")
+                .GreaterThan(0).WithMessage("Weight must be greater than 0.")
                 .LessThanOrEqualTo(100).WithMessage("Weight cannot exceed 100%.");
 
             RuleFor(x => x.ToleranceBandPercent)

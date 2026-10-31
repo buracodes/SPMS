@@ -18,7 +18,8 @@ public enum AccessSource : byte
 {
     None = 0,
     DirectUserAssignment = 1,
-    GroupAssignment = 2
+    GroupAssignment = 2,
+    PositionAssignment = 3
 }
 
 /// <summary>Collection counts shown on the Access Control summary cards.</summary>
@@ -60,7 +61,6 @@ public record AccessDirectoryUserDto(
     string? Email,
     string FullName,
     bool IsActive,
-    DateTime? LastLoginAtUtc,
     Guid? DivisionId,
     string? DivisionName,
     string[] GroupNames);
@@ -74,7 +74,6 @@ public record AccessUserDetailDto(
     bool IsActive,
     Guid? DivisionId,
     string? DivisionName,
-    DateTime? LastLoginAtUtc,
     string[] GroupNames,
     int UnassignedGroupsCount);
 

@@ -1,4 +1,3 @@
-using Application.Interface.IService;
 using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
@@ -12,25 +11,18 @@ namespace Infrastructure.Persistence.Seed
 {
     public static class SpmsDbSeeder
     {
-        public static async Task SeedAsync(
-            SpmsDbContext context,
-            IPasswordHasher passwordHasher,
-            DefaultAdminOptions defaultAdmin,
-            bool seedTemporaryData = false)
+        /// <summary>
+        /// Seeds reference data only. Accounts are never seeded locally: identities and
+        /// passwords come from Active Directory, and the first administrator is granted the
+        /// Admin group through <see cref="Application.Options.SecurityOptions.BootstrapAdminUsernames"/>.
+        /// </summary>
+        public static async Task SeedAsync(SpmsDbContext context)
         {
             await SeedPermissionsAsync(context);
             await SeedRolesAsync(context);
             await SeedRolePermissionsAsync(context);
-            await SeedDefaultAdminAsync(context, passwordHasher, defaultAdmin);
-            await SeedRoleUsersAsync(context, passwordHasher);
             await SeedOrganizationProfileAsync(context);
-            await SeedDivisionAccountsAsync(context, passwordHasher);
             await SeedRagThresholdsAsync(context);
-
-            if (seedTemporaryData)
-            {
-                await SeedTemporaryDirectoryAsync(context, passwordHasher);
-            }
         }
 
         private static async Task SeedPermissionsAsync(SpmsDbContext context)
@@ -120,90 +112,6 @@ namespace Infrastructure.Persistence.Seed
             }
         }
 
-        private static async Task SeedRoleUsersAsync(SpmsDbContext context, IPasswordHasher passwordHasher)
-        {
-            var roles = await context.Roles.ToListAsync();
-            var existingUsernames = await context.Users.Select(u => u.Username).ToListAsync();
-
-            var roleUsers = new[]
-            {
-                new { RoleName = Roles.PowerUser, Username = "poweruser", FullName = "Power User", Email = "poweruser@ecx.com.et" },
-                new { RoleName = Roles.Executive, Username = "executive", FullName = "Executive", Email = "executive@ecx.com.et" },
-                new { RoleName = Roles.DataInputUser, Username = "datainput", FullName = "Data Input User", Email = "datainput@ecx.com.et" },
-                new { RoleName = Roles.ViewOnly, Username = "viewonly", FullName = "View Only", Email = "viewonly@ecx.com.et" }
-            };
-
-            var usersToAdd = new List<User>();
-            foreach (var roleUser in roleUsers)
-            {
-                if (existingUsernames.Contains(roleUser.Username))
-                {
-                    continue;
-                }
-
-                var role = roles.FirstOrDefault(r => r.Name == roleUser.RoleName);
-                if (role == null)
-                {
-                    continue;
-                }
-
-                var userId = Guid.NewGuid();
-                usersToAdd.Add(new User
-                {
-                    Id = userId,
-                    Username = roleUser.Username,
-                    FullName = roleUser.FullName,
-                    Email = roleUser.Email,
-                    PasswordHash = passwordHasher.HashPassword(roleUser.Username),
-                    IsActive = true,
-                    UserRoles = new List<UserRole>
-                    {
-                        new UserRole { UserId = userId, RoleId = role.Id }
-                    }
-                });
-
-                existingUsernames.Add(roleUser.Username);
-            }
-
-            if (usersToAdd.Count > 0)
-            {
-                await context.Users.AddRangeAsync(usersToAdd);
-                await context.SaveChangesAsync();
-            }
-        }
-
-        private static async Task SeedDefaultAdminAsync(
-            SpmsDbContext context,
-            IPasswordHasher passwordHasher,
-            DefaultAdminOptions defaultAdmin)
-        {
-            if (await context.Users.AnyAsync())
-            {
-                return;
-            }
-
-            var adminRole = await context.Roles.FirstOrDefaultAsync(r => r.Name == Roles.Admin);
-
-            var user = new User
-            {
-                Id = Guid.NewGuid(),
-                Username = defaultAdmin.Username,
-                FullName = defaultAdmin.FullName,
-                Email = defaultAdmin.Email,
-                PasswordHash = passwordHasher.HashPassword(defaultAdmin.Password),
-                IsActive = true,
-                UserRoles = new List<UserRole>()
-            };
-
-            if (adminRole != null)
-            {
-                user.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = adminRole.Id });
-            }
-
-            await context.Users.AddAsync(user);
-            await context.SaveChangesAsync();
-        }
-
         private static async Task SeedOrganizationProfileAsync(SpmsDbContext context)
         {
             if (await context.OrganizationProfiles.AnyAsync())
@@ -253,151 +161,6 @@ namespace Infrastructure.Persistence.Seed
             };
 
             await context.OrganizationProfiles.AddAsync(profile);
-            await context.SaveChangesAsync();
-        }
-
-        public static async Task SeedDivisionAccountsAsync(SpmsDbContext context, IPasswordHasher passwordHasher)
-        {
-            var dataInputRole = await context.Roles.FirstOrDefaultAsync(r => r.Name == Roles.DataInputUser);
-            if (dataInputRole == null)
-            {
-                return;
-            }
-
-            var divisions = await context.Divisions.ToListAsync();
-            if (divisions.Count == 0)
-            {
-                return;
-            }
-
-            var existingUsernames = (await context.Users.Select(u => u.Username).ToListAsync())
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var divisionIdsWithAccounts = (await context.Users
-                .Where(u => u.DivisionId != null)
-                .Select(u => u.DivisionId!.Value)
-                .ToListAsync())
-                .ToHashSet();
-
-            var accountIds = new List<Guid>();
-
-            foreach (var division in divisions)
-            {
-                if (divisionIdsWithAccounts.Contains(division.Id) || existingUsernames.Contains(division.Code))
-                {
-                    continue;
-                }
-
-                var userId = Guid.NewGuid();
-                context.Users.Add(new User
-                {
-                    Id = userId,
-                    Username = division.Code,
-                    FullName = $"{division.Name} Division Account",
-                    PasswordHash = passwordHasher.HashPassword(division.Code),
-                    IsActive = true,
-                    DivisionId = division.Id,
-                    UserRoles = new List<UserRole>
-                    {
-                        new UserRole { UserId = userId, RoleId = dataInputRole.Id }
-                    }
-                });
-
-                accountIds.Add(userId);
-                existingUsernames.Add(division.Code);
-            }
-
-            if (accountIds.Count > 0)
-            {
-                await context.SaveChangesAsync();
-            }
-        }
-
-        /// <summary>
-        /// Development-only directory used to exercise multi-user and multi-division behaviour:
-        /// six temporary divisions and ten temporary employees (View Only, plus Data Input for the
-        /// first eight). Idempotent by code/username and never touches existing rows.
-        /// </summary>
-        private static async Task SeedTemporaryDirectoryAsync(SpmsDbContext context, IPasswordHasher passwordHasher)
-        {
-            const int divisionCount = 6;
-            const int employeeCount = 10;
-
-            var divisions = await context.Divisions
-                .Where(d => d.Code.StartsWith("TEMP-DIV-"))
-                .ToDictionaryAsync(d => d.Code, StringComparer.OrdinalIgnoreCase);
-
-            for (var i = 1; i <= divisionCount; i++)
-            {
-                var code = $"TEMP-DIV-{i:000}";
-                if (divisions.ContainsKey(code))
-                {
-                    continue;
-                }
-
-                var division = new Division
-                {
-                    Id = Guid.NewGuid(),
-                    Name = $"Temporary Division {i}",
-                    Code = code,
-                    IsActive = true
-                };
-
-                context.Divisions.Add(division);
-                divisions[code] = division;
-            }
-
-            var roles = await context.Roles
-                .Where(r => r.Name == Roles.ViewOnly || r.Name == Roles.DataInputUser)
-                .ToListAsync();
-            var viewOnlyRole = roles.FirstOrDefault(r => r.Name == Roles.ViewOnly);
-            var dataInputRole = roles.FirstOrDefault(r => r.Name == Roles.DataInputUser);
-
-            var existingUsernames = (await context.Users.Select(u => u.Username).ToListAsync())
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            for (var i = 1; i <= employeeCount; i++)
-            {
-                var username = $"TEMP-EMP-{i:000}";
-                if (existingUsernames.Contains(username))
-                {
-                    continue;
-                }
-
-                var divisionIndex = i <= 8 ? ((i - 1) / 2) + 1 : i - 4;
-                var divisionCode = $"TEMP-DIV-{divisionIndex:000}";
-                if (!divisions.TryGetValue(divisionCode, out var division))
-                {
-                    continue;
-                }
-
-                var userId = Guid.NewGuid();
-                var user = new User
-                {
-                    Id = userId,
-                    Username = username,
-                    FullName = $"Temporary Employee {i}",
-                    Email = $"{username}@ecx.local",
-                    PasswordHash = passwordHasher.HashPassword(username),
-                    IsActive = true,
-                    DivisionId = division.Id,
-                    UserRoles = new List<UserRole>()
-                };
-
-                if (viewOnlyRole != null)
-                {
-                    user.UserRoles.Add(new UserRole { UserId = userId, RoleId = viewOnlyRole.Id });
-                }
-
-                if (i <= 8 && dataInputRole != null)
-                {
-                    user.UserRoles.Add(new UserRole { UserId = userId, RoleId = dataInputRole.Id });
-                }
-
-                context.Users.Add(user);
-                existingUsernames.Add(username);
-            }
-
             await context.SaveChangesAsync();
         }
 

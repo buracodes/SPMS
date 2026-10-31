@@ -35,6 +35,16 @@ public class DivisionGoalRepository : GenericRepository<DivisionGoal>, IDivision
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<DivisionGoal>> GetByPlanIdsWithKpisAsync(IReadOnlyList<Guid> divisionPlanIds)
+    {
+        return await context.DivisionGoals
+            .Where(g => divisionPlanIds.Contains(g.DivisionPlanId))
+            .Include(g => g.Kpis)
+            .Include(g => g.ParentGoal)
+            .OrderBy(g => g.Name)
+            .ToListAsync();
+    }
+
     public async Task<bool> ExistsByNameInPlanAsync(Guid divisionPlanId, string name, Guid? excludeId = null)
     {
         return await context.DivisionGoals.AnyAsync(g => g.DivisionPlanId == divisionPlanId && g.Name == name && g.Id != excludeId);

@@ -32,6 +32,7 @@ public sealed class ReportingService : IReportingService
     private readonly IDivisionPlanRepository divisionPlanRepository;
     private readonly IDivisionReportService divisionReportService;
     private readonly IRagThresholdService ragThresholdService;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     /// <summary>Effective RAG thresholds (FR-607) for the report being generated.</summary>
     private Application.Dashboard.RagThresholds thresholds = Application.Dashboard.RagThresholds.Default;
@@ -58,7 +59,8 @@ public sealed class ReportingService : IReportingService
         IDivisionPlanRepository _divisionPlanRepository,
         IDivisionReportService _divisionReportService,
         IInitiativeProgressCalculator _initiativeProgressCalculator,
-        IRagThresholdService _ragThresholdService)
+        IRagThresholdService _ragThresholdService,
+        IOrganizationalScopeService _organizationalScope)
     {
         scorecardRepository = _scorecardRepository;
         fiscalYearRepository = _fiscalYearRepository;
@@ -77,6 +79,7 @@ public sealed class ReportingService : IReportingService
         divisionPlanRepository = _divisionPlanRepository;
         divisionReportService = _divisionReportService;
         ragThresholdService = _ragThresholdService;
+        organizationalScope = _organizationalScope;
     }
 
     public IReadOnlyList<ReportTemplateDto> GetTemplates()
@@ -392,53 +395,69 @@ public sealed class ReportingService : IReportingService
         var months = SelectMonths(filter, periods);
         ct.ThrowIfCancellationRequested();
 
+        if (filter.DivisionId is { } requestedDivisionId)
+        {
+            await organizationalScope.EnsureDivisionAsync(requestedDivisionId, ct);
+        }
+
         var divisions = await ResolveDivisionsAsync(filter, scorecard.Id, ct);
+
+        // FR-908: a principal without portfolio visibility only ever sees its own division,
+        // even if the request omits the division filter.
+        if (!await organizationalScope.HasDivisionPortfolioAccessAsync(ct))
+        {
+            divisions = organizationalScope.DivisionId is { } ownDivisionId
+                ? divisions.Where(d => d.Id == ownDivisionId).ToList()
+                : Array.Empty<Division>();
+        }
 
         envelope.Title = "Division Performance";
         envelope.Subtitle = $"{scorecard.Name} · {fiscalYear?.Label}";
         envelope.Columns = new List<string>
         {
-            "Division", "KPI", "Fiscal Month", "Quarter", "Target", "Actual", "Score", "RAG", "Weight %", "Unit", "Cumulative"
+            "Division", "Division Goal", "Corporate Goal", "KPI", "Fiscal Month", "Quarter",
+            "Target", "Actual", "Score", "RAG", "Weight %", "Unit", "Cumulative"
         };
 
-        foreach (var division in divisions)
+        var reportRows = divisions.Count == 0
+            ? Array.Empty<DivisionReportDto>()
+            : await divisionReportService.GetDivisionReportsAsync(
+                divisions.Select(d => d.Id).ToList(), scorecard.Id, scorecard.FiscalYearId, ct);
+
+        foreach (var row in reportRows
+            .OrderBy(r => r.DivisionName)
+            .ThenBy(r => r.GoalName)
+            .ThenBy(r => r.KpiName)
+            .ThenBy(r => r.FiscalMonth))
         {
-            var reportRows = await divisionReportService.GetDivisionReportAsync(
-                division.Id, scorecard.Id, scorecard.FiscalYearId, ct);
-
-            foreach (var row in reportRows.OrderBy(r => r.KpiName).ThenBy(r => r.FiscalMonth))
+            if (!months.Contains(row.FiscalMonth))
             {
-                if (!months.Contains(row.FiscalMonth))
-                {
-                    continue;
-                }
-
-                envelope.Rows.Add(new List<string?>
-                {
-                    row.DivisionName,
-                    row.KpiName,
-                    MonthLabel(row.FiscalMonth),
-                    row.Quarter.ToString(),
-                    FormatNum(row.TargetValue),
-                    FormatNum(row.ActualValue),
-                    FormatNum(row.Score),
-                    Rag(row.Score),
-                    FormatNum(row.Weight),
-                    row.Unit,
-                    row.IsCumulative ? "Yes" : "No"
-                });
+                continue;
             }
+
+            envelope.Rows.Add(new List<string?>
+            {
+                row.DivisionName,
+                row.GoalName,
+                row.CorporateGoalName,
+                row.KpiName,
+                MonthLabel(row.FiscalMonth),
+                row.Quarter.ToString(),
+                FormatNum(row.TargetValue),
+                FormatNum(row.ActualValue),
+                FormatNum(row.Score),
+                Rag(row.Score),
+                FormatNum(row.Weight),
+                row.Unit,
+                row.IsCumulative ? "Yes" : "No"
+            });
         }
 
         foreach (var division in divisions)
         {
-            var rows = envelope.Rows
-                .Where(r => r.Count > 0 && r[0] == division.Name)
-                .ToList();
-            var scores = rows
-                .Select(r => r.ElementAtOrDefault(6) is { } s && decimal.TryParse(s, out var d) ? d : (decimal?)null)
-                .Where(s => s.HasValue)
-                .Select(s => s!.Value)
+            var scores = reportRows
+                .Where(r => r.DivisionId == division.Id && months.Contains(r.FiscalMonth) && r.Score.HasValue)
+                .Select(r => r.Score!.Value)
                 .ToList();
 
             envelope.Summary.Add(division.Name + " (KPI avg)", scores.Count == 0 ? "—" : FormatNum(scores.Average()));

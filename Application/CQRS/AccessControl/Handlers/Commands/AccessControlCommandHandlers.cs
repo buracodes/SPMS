@@ -1,9 +1,11 @@
 using Application.CQRS.AccessControl;
 using Application.CQRS.AccessControl.Requests.Commands;
+using Application.DTOS.AccessControl;
 using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
+using Application.Services;
 using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
@@ -54,6 +56,8 @@ public class AccessControlCommandHandlers :
     private readonly IGenericRepository<Permission> permissionRepository;
     private readonly IGenericRepository<UserRight> userRightRepository;
     private readonly IGenericRepository<User> userRepository;
+    private readonly IUserRepository employeeAccounts;
+    private readonly IHRInfoRepository hrInfoRepository;
     private readonly ICurrentUserService currentUserService;
     private readonly IAuditContext auditContext;
 
@@ -65,6 +69,8 @@ public class AccessControlCommandHandlers :
         IGenericRepository<Permission> _permissionRepository,
         IGenericRepository<UserRight> _userRightRepository,
         IGenericRepository<User> _userRepository,
+        IUserRepository _employeeAccounts,
+        IHRInfoRepository _hrInfoRepository,
         ICurrentUserService _currentUserService,
         IAuditContext _auditContext)
     {
@@ -75,6 +81,8 @@ public class AccessControlCommandHandlers :
         permissionRepository = _permissionRepository;
         userRightRepository = _userRightRepository;
         userRepository = _userRepository;
+        employeeAccounts = _employeeAccounts;
+        hrInfoRepository = _hrInfoRepository;
         currentUserService = _currentUserService;
         auditContext = _auditContext;
     }
@@ -127,7 +135,31 @@ public class AccessControlCommandHandlers :
         }
 
         var actor = RequireActor();
-        role.Description = request.Dto!.Description?.Trim();
+        var dto = request.Dto!;
+
+        var newName = dto.Name?.Trim();
+        if (!string.IsNullOrEmpty(newName) && !string.Equals(newName, role.Name, StringComparison.Ordinal))
+        {
+            if (IsProtectedGroup(role.Name))
+            {
+                throw new BadRequestException("The protected system group cannot be renamed.");
+            }
+
+            if (Roles.All.Contains(newName, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new BadRequestException("This name is reserved for a protected system group.");
+            }
+
+            var roles = await rbacRepository.GetAllRolesWithRightsAsync();
+            if (roles.Any(r => r.Id != role.Id && string.Equals(r.Name, newName, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new BadRequestException($"An access group named '{newName}' already exists.");
+            }
+
+            role.Name = newName;
+        }
+
+        role.Description = dto.Description?.Trim();
         role.UpdatedBy = actor;
         role.UpdatedDate = DateTime.UtcNow;
         await roleRepository.Update(role);
@@ -197,11 +229,7 @@ public class AccessControlCommandHandlers :
         var actor = RequireActor();
         var now = DateTime.UtcNow;
 
-        var user = await userRepository.GetById(request.UserId);
-        if (user == null)
-        {
-            throw new NotFoundException(nameof(User), request.UserId);
-        }
+        var user = await ResolveAssignableEmployeeAsync(request.UserId, actor, cancellationToken);
 
         var role = await rbacRepository.GetRoleWithRightsAsync(request.GroupId);
         if (role == null || role.Status != EntityStatus.Active)
@@ -214,22 +242,34 @@ public class AccessControlCommandHandlers :
             throw new ForbiddenException("You cannot change your own access group memberships.");
         }
 
-        var (_, members) = SplitMembers(role);
-        if (members.Contains(request.UserId))
+        var membership = role.UserRoles.FirstOrDefault(ur => ur.UserId == request.UserId);
+        if (membership != null && !membership.IsDeleted && membership.Status == EntityStatus.Active)
         {
             throw new BadRequestException("The employee is already a member of this access group.");
         }
 
-        var membership = new UserRole
+        if (membership == null)
         {
-            Id = Guid.NewGuid(),
-            UserId = request.UserId,
-            RoleId = role.Id,
-            Status = EntityStatus.Active,
-            CreatedBy = actor,
-            CreatedDate = now
-        };
-        await membershipRepository.Add(membership);
+            membership = new UserRole
+            {
+                Id = Guid.NewGuid(),
+                UserId = request.UserId,
+                RoleId = role.Id,
+                Status = EntityStatus.Active,
+                CreatedBy = actor,
+                CreatedDate = now
+            };
+            await membershipRepository.Add(membership);
+        }
+        else
+        {
+            // (UserId, RoleId) is the key, so a removed membership must be revived, not re-inserted.
+            membership.IsDeleted = false;
+            membership.Status = EntityStatus.Active;
+            membership.UpdatedBy = actor;
+            membership.UpdatedDate = now;
+            await membershipRepository.Update(membership);
+        }
 
         return new Response<GroupMembershipRowDto>
         {
@@ -330,12 +370,16 @@ public class AccessControlCommandHandlers :
         }
         else
         {
-            if (row.Effect == PermissionEffect.Grant && request.Effect != PermissionEffect.Grant)
+            var wasLiveGrant = !row.IsDeleted && row.Status == EntityStatus.Active && row.Effect == PermissionEffect.Grant;
+            if (wasLiveGrant && request.Effect != PermissionEffect.Grant)
             {
                 await RequireRoleLeftAfterRightChangeAsync(role.Id, permission.Name);
             }
 
+            // (RoleId, PermissionId) is the key, so a removed right must be revived, not re-inserted.
             row.Effect = request.Effect;
+            row.IsDeleted = false;
+            row.Status = EntityStatus.Active;
             row.UpdatedBy = actor;
             row.UpdatedDate = now;
             await roleRightRepository.Update(row);
@@ -361,7 +405,8 @@ public class AccessControlCommandHandlers :
             throw new NotFoundException(nameof(Role), request.GroupId);
         }
 
-        var row = role.RolePermissions.FirstOrDefault(rp => rp.PermissionId == request.RightId);
+        var row = role.RolePermissions.FirstOrDefault(rp =>
+            rp.PermissionId == request.RightId && !rp.IsDeleted && rp.Status == EntityStatus.Active);
         if (row == null)
         {
             throw new NotFoundException("Group right");
@@ -408,11 +453,7 @@ public class AccessControlCommandHandlers :
         var actor = RequireActor();
         var now = DateTime.UtcNow;
 
-        var user = await userRepository.GetById(request.UserId);
-        if (user == null)
-        {
-            throw new NotFoundException(nameof(User), request.UserId);
-        }
+        var user = await ResolveAssignableEmployeeAsync(request.UserId, actor, cancellationToken);
 
         var permission = await permissionRepository.GetById(request.RightId);
         if (permission == null)
@@ -626,6 +667,34 @@ public class AccessControlCommandHandlers :
         return actor;
     }
 
+    /// <summary>
+    /// Resolves the employee a grant targets. The pickers only offer active HR employees; an
+    /// employee who has never signed in has no local row yet, so one is created from the verified
+    /// HR/AD identity mapping and linked to their AD account by object GUID, which is what first
+    /// sign-in matches on.
+    /// </summary>
+    private async Task<User> ResolveAssignableEmployeeAsync(Guid userId, Guid actor, CancellationToken cancellationToken)
+    {
+        var existing = await userRepository.GetById(userId);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var employee = await hrInfoRepository.FindActiveEmployeeByIdAsync(userId, cancellationToken);
+        if (employee == null)
+        {
+            throw new NotFoundException("Active HR employee", userId);
+        }
+
+        return await employeeAccounts.EnsureEmployeeAccountAsync(
+            userId,
+            EmployeeNaming.DisplayName(employee),
+            EmployeeNaming.UsernameHint(employee),
+            actor,
+            cancellationToken);
+    }
+
     private async Task RequireOtherAdministratorAsync(Guid affectedUserId)
     {
         var administratorIds = await rbacRepository.GetActiveAdministratorUserIdsAsync();
@@ -670,8 +739,8 @@ public class AccessControlCommandHandlers :
         role.Name,
         role.Description,
         role.UserRoles.Count(ur => !ur.IsDeleted && ur.Status == EntityStatus.Active),
-        role.RolePermissions.Count,
-        role.RolePermissions.Count(rp => rp.Effect == PermissionEffect.Deny),
+        role.RolePermissions.Count(rp => !rp.IsDeleted && rp.Status == EntityStatus.Active && rp.Effect == PermissionEffect.Grant),
+        role.RolePermissions.Count(rp => !rp.IsDeleted && rp.Status == EntityStatus.Active && rp.Effect == PermissionEffect.Deny),
         role.Status == EntityStatus.Active && !role.IsDeleted,
         role.Status.ToString(),
         role.UpdatedDate ?? role.CreatedDate);

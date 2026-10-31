@@ -66,18 +66,20 @@ public class GetAllKpiQueryHandler : IRequestHandler<GetAllKpiQueryRequest, Resp
         if (request.KraId.HasValue)
             filtered = filtered.Where(k => k.KraId == request.KraId.Value);
 
-        // A KPI sits under a goal through its KRA, so the goal filter narrows the KRA set.
+        // A corporate KPI sits under a goal through its KRA; a division KPI links to the
+        // corporate goal directly through its division goal, so both paths are matched.
         if (request.GoalId.HasValue)
             filtered = filtered.Where(k =>
-                k.KraId.HasValue &&
-                kraById.TryGetValue(k.KraId.Value, out var kra) &&
-                kra.GoalId == request.GoalId.Value);
+                (k.KraId.HasValue &&
+                 kraById.TryGetValue(k.KraId.Value, out var kra) &&
+                 kra.GoalId == request.GoalId.Value) ||
+                (k.DivisionGoal != null && k.DivisionGoal.ParentGoalId == request.GoalId.Value));
 
         var dtos = filtered.Select(k =>
         {
             var scorecardName = scorecardById.TryGetValue(k.ScorecardId, out var scorecard) ? scorecard.Name : null;
             var kra = k.KraId.HasValue && kraById.TryGetValue(k.KraId.Value, out var found) ? found : null;
-            var goalId = kra?.GoalId;
+            var goalId = kra?.GoalId ?? k.DivisionGoal?.ParentGoalId;
             var goalName = goalId.HasValue && goalNameById.TryGetValue(goalId.Value, out var name) ? name : null;
 
             return new GetAllKpiDto

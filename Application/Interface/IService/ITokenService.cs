@@ -8,13 +8,16 @@ namespace Application.Interface.IService
 
     public interface ITokenService
     {
+        /// <summary>
+        /// Mints the minimum stable identity (object GUID, username) and authorization (group names,
+        /// effective rights) claims. Mutable HR details and organizational scope are not embedded;
+        /// they are resolved from the database per request.
+        /// </summary>
         AccessTokenResult CreateAccessToken(
             Guid userId,
             string username,
-            string fullName,
             IReadOnlyList<string> roles,
-            IReadOnlyList<string> permissions,
-            Guid? divisionId = null);
+            IReadOnlyList<string> permissions);
 
         string CreateRefreshTokenValue();
         string HashRefreshToken(string refreshToken);

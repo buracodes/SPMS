@@ -18,11 +18,20 @@ namespace Application.Interface.IService;
 /// </summary>
 public interface IOrganizationalScopeService
 {
-    /// <summary>The division the principal belongs to, when the token carries one.</summary>
+    /// <summary>The division the principal currently belongs to, resolved from current state.</summary>
     Guid? DivisionId { get; }
 
     /// <summary>True when the principal effectively holds corporate-wide visibility.</summary>
     Task<bool> HasCorporateAccessAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// True when the principal may browse the division portfolio (division list, corporate
+    /// goals in a division plan, division report). Corporate roles qualify through
+    /// <c>performance:monitor.view</c>; read-only corporate roles (View Only) qualify through
+    /// <c>divisions:view</c>. A principal with a division claim is always limited to its own
+    /// division, so this returns false for division accounts.
+    /// </summary>
+    Task<bool> HasDivisionPortfolioAccessAsync(CancellationToken cancellationToken = default);
 
     /// <summary>True when the principal may access the given division's data.</summary>
     Task<bool> CanAccessDivisionAsync(Guid divisionId, CancellationToken cancellationToken = default);

@@ -149,7 +149,6 @@ public class AuditLogReasonCaptureTests
             Id = SeededAdminUserId,
             Username = "admin",
             FullName = "Admin",
-            PasswordHash = "hash"
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);

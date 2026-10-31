@@ -293,7 +293,6 @@ public class SetPeriodLockConfigCommandHandlerTests
             Id = Guid.NewGuid(),
             Username = "testuser",
             FullName = "Test User",
-            PasswordHash = "hash",
             Email = "test@example.com"
         };
 

@@ -1,5 +1,7 @@
 using Application.Behaviors;
+using Application.CQRS.Division.Requests.Commands;
 using Application.CQRS.KpiActuals.Requests.Commands;
+using Application.DTOS.Division;
 using Application.DTOS.KpiActual;
 using Application.Exceptions;
 using Application.Interface.IService;
@@ -37,6 +39,90 @@ public class LockAuthorizationBehaviorTests
         await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<ActualValueDto>()); }, CancellationToken.None);
 
         Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Allows_WhenPeriodOpen_ForDivisionOwner()
+    {
+        // FR-906: division KPIs are owned by a division, so a division account must be
+        // able to enter actuals during the open window even though Kpi.OwnerId is null.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateDivisionFixtureAsync(lease);
+        // July 2025 (fiscal month 1) is open during 1-7 August 2025.
+        var clock = TestBusinessClock.On(new DateTime(2025, 8, 3, 9, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateDivisionBehavior(lease, new TestCurrentUserService
+        {
+            DivisionId = fixture.OwnerDivisionId
+        }, clock);
+
+        var command = new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.OwnerDivisionId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10
+            }
+        };
+
+        var invoked = false;
+        await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<DivisionActualValueDto>()); }, CancellationToken.None);
+
+        Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Blocks_WhenPeriodOpen_ForAnotherDivision()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateDivisionFixtureAsync(lease);
+        var clock = TestBusinessClock.On(new DateTime(2025, 8, 3, 9, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateDivisionBehavior(lease, new TestCurrentUserService
+        {
+            DivisionId = fixture.OtherDivisionId
+        }, clock);
+
+        var command = new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.OtherDivisionId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<DivisionActualValueDto>()), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Blocks_WhenPeriodOpen_ForDivisionOwner_OnCorporateActualCommand()
+    {
+        // Division ownership only applies to the division actuals path; corporate KPI
+        // actuals stay limited to the individual KPI owner or an override user.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateDivisionFixtureAsync(lease);
+        var clock = TestBusinessClock.On(new DateTime(2025, 8, 3, 9, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            DivisionId = fixture.OwnerDivisionId
+        }, clock);
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
     }
 
     [Fact]
@@ -287,25 +373,40 @@ public class LockAuthorizationBehaviorTests
         return (fixture.KpiId, fixture.ScorecardId, fixture.PeriodId);
     }
 
-    private static LockAuthorizationBehavior<EnterActualValueCommandRequest, Response<ActualValueDto>> CreateBehavior(
-        TestDbContextLease lease,
-        ICurrentUserService currentUserService,
-        TestBusinessClock? businessClock = null)
+    private static PeriodLockStatusService CreateLockService(TestDbContextLease lease)
     {
-        var lockService = new PeriodLockStatusService(
+        return new PeriodLockStatusService(
             new FiscalPeriodRepository(lease.Context),
             new PeriodLockConfigRepository(lease.Context),
             new SystemConfigRepository(lease.Context),
             new FiscalYearRepository(lease.Context),
             TestBusinessClock.Real(),
             NullLogger<PeriodLockStatusService>.Instance);
+    }
 
+    private static LockAuthorizationBehavior<EnterActualValueCommandRequest, Response<ActualValueDto>> CreateBehavior(
+        TestDbContextLease lease,
+        ICurrentUserService currentUserService,
+        TestBusinessClock? businessClock = null)
+    {
         // Default clock pins the business date to the fixture's last fiscal-year day
         // (2026-06-30), so the seeded 2025 fiscal year stays open unless a test moves the
         // clock past the end date.
         return new LockAuthorizationBehavior<EnterActualValueCommandRequest, Response<ActualValueDto>>(
             new KpiRepository(lease.Context),
-            lockService,
+            CreateLockService(lease),
+            currentUserService,
+            businessClock ?? TestBusinessClock.On(new DateTime(2026, 6, 30, 9, 0, 0, DateTimeKind.Utc)));
+    }
+
+    private static LockAuthorizationBehavior<EnterDivisionActualValueCommandRequest, Response<DivisionActualValueDto>> CreateDivisionBehavior(
+        TestDbContextLease lease,
+        ICurrentUserService currentUserService,
+        TestBusinessClock? businessClock = null)
+    {
+        return new LockAuthorizationBehavior<EnterDivisionActualValueCommandRequest, Response<DivisionActualValueDto>>(
+            new KpiRepository(lease.Context),
+            CreateLockService(lease),
             currentUserService,
             businessClock ?? TestBusinessClock.On(new DateTime(2026, 6, 30, 9, 0, 0, DateTimeKind.Utc)));
     }
@@ -345,6 +446,62 @@ public class LockAuthorizationBehaviorTests
         return (fixture.KpiId, fixture.OwnerId, fixture.ScorecardId, fixture.PeriodId);
     }
 
+    private static async Task<(Guid KpiId, Guid PeriodId, Guid OwnerDivisionId, Guid OtherDivisionId)> CreateDivisionFixtureAsync(TestDbContextLease lease)
+    {
+        var calendar = new FiscalCalendarService();
+        var fiscalYear = calendar.CreateFiscalYear(2025);
+        var periods = calendar.GeneratePeriods(fiscalYear);
+        var july = periods.First(p => p.FiscalMonth == 1);
+
+        var scorecard = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = fiscalYear.Id,
+            Name = "Division Lock Behavior",
+            Scope = ScorecardScope.Corporate
+        };
+        var parentGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Parent Goal", Weight = 100 };
+        var ownerDivision = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Information Technology", Code = "IT" };
+        var otherDivision = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Trade Operations", Code = "TRO" };
+        var plan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = ownerDivision.Id,
+            ScorecardId = scorecard.Id,
+            PlanStatus = DivisionPlanStatus.Finalized
+        };
+        var divisionGoal = new DivisionGoal
+        {
+            Id = Guid.NewGuid(),
+            DivisionPlanId = plan.Id,
+            ParentGoalId = parentGoal.Id,
+            Name = "Division Goal",
+            Weight = 100
+        };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            DivisionGoalId = divisionGoal.Id,
+            DivisionOwnerId = ownerDivision.Id,
+            Name = "Systems Delivered",
+            Weight = 100,
+            IsActive = true
+        };
+
+        lease.Context.FiscalYears.Add(fiscalYear);
+        lease.Context.FiscalPeriods.AddRange(periods);
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(parentGoal);
+        lease.Context.Divisions.AddRange(ownerDivision, otherDivision);
+        lease.Context.DivisionPlans.Add(plan);
+        lease.Context.DivisionGoals.Add(divisionGoal);
+        lease.Context.Kpis.Add(kpi);
+        await lease.Context.SaveChangesAsync();
+
+        return (kpi.Id, july.Id, ownerDivision.Id, otherDivision.Id);
+    }
+
     private static async Task<(Guid KpiId, Guid OwnerId, Guid ScorecardId, Guid PeriodId, Guid FinalPeriodId)> CreateBaseFixtureAsync(TestDbContextLease lease)
     {
         var calendar = new FiscalCalendarService();
@@ -368,7 +525,6 @@ public class LockAuthorizationBehaviorTests
             Id = ownerId,
             Username = "owner",
             FullName = "Kpi Owner",
-            PasswordHash = "hash"
         };
         var kpi = new Kpi
         {

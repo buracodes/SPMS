@@ -47,21 +47,7 @@ public class DivisionHandlerTests
     private static CreateDivisionCommandHandler CreateDivisionHandler(TestDbContextLease lease)
         => new(
             new DivisionRepository(lease.Context),
-            new UserRepository(lease.Context),
-            new GenericRepository<Role>(lease.Context),
-            new PasswordHasherService(),
             new SpmsUnitOfWork(lease.Context));
-
-    private static async Task SeedDataInputRoleAsync(TestDbContextLease lease)
-    {
-        lease.Context.Roles.Add(new Role
-        {
-            Id = Guid.NewGuid(),
-            Name = Roles.DataInputUser,
-            Description = "Default Data Input User role."
-        });
-        await lease.Context.SaveChangesAsync();
-    }
 
     private static SetDivisionContributionsCommandHandler CreateContributionsHandler(TestDbContextLease lease)
         => new(
@@ -174,7 +160,6 @@ public class DivisionHandlerTests
     public async Task CreateDivision_CreatesActiveDivision()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        await SeedDataInputRoleAsync(lease);
         var handler = CreateDivisionHandler(lease);
 
         var response = await handler.Handle(new CreateDivisionCommandRequest
@@ -191,16 +176,14 @@ public class DivisionHandlerTests
         var saved = await lease.Context.Divisions.SingleAsync();
         Assert.Equal(response.Data.Id, saved.Id);
 
-        var account = await lease.Context.Users.SingleAsync(u => u.DivisionId == saved.Id);
-        Assert.Equal("RET", account.Username);
-        Assert.True(await lease.Context.UserRoles.AnyAsync(ur => ur.UserId == account.Id));
+        // AD-only authentication: a division never gets a local login account.
+        Assert.False(await lease.Context.Users.AnyAsync());
     }
 
     [Fact]
     public async Task CreateDivision_DuplicateName_ThrowsBadRequest()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        await SeedDataInputRoleAsync(lease);
         var handler = CreateDivisionHandler(lease);
         await handler.Handle(new CreateDivisionCommandRequest { Name = "Retail", Code = "RET" }, CancellationToken.None);
 
@@ -212,7 +195,6 @@ public class DivisionHandlerTests
     public async Task CreateDivision_DuplicateCode_ThrowsBadRequest()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        await SeedDataInputRoleAsync(lease);
         var handler = CreateDivisionHandler(lease);
         await handler.Handle(new CreateDivisionCommandRequest { Name = "Retail", Code = "RET" }, CancellationToken.None);
 
@@ -488,6 +470,8 @@ public class DivisionHandlerTests
         Assert.Equal(goal.Data.Id, savedKpi.DivisionGoalId);
         Assert.Null(savedKpi.KraId);
         Assert.Equal(fixture.ScorecardId, savedKpi.ScorecardId);
+        Assert.Equal(divisionId, savedKpi.DivisionOwnerId);
+        Assert.Null(savedKpi.OwnerId);
 
         var savedTargets = await lease.Context.KpiTargets.Where(t => t.KpiId == savedKpi.Id).ToListAsync();
         Assert.Equal(17, savedTargets.Count);

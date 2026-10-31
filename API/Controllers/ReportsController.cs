@@ -15,10 +15,14 @@ namespace API.Controllers;
 public class ReportsController : ControllerBase
 {
     private readonly IReportingService reportingService;
+    private readonly IAuthorizationService authorizationService;
 
-    public ReportsController(IReportingService _reportingService)
+    public ReportsController(
+        IReportingService _reportingService,
+        IAuthorizationService _authorizationService)
     {
         reportingService = _reportingService;
+        authorizationService = _authorizationService;
     }
 
     [HttpGet("templates")]
@@ -34,6 +38,13 @@ public class ReportsController : ControllerBase
         [FromBody] ReportFilter filter,
         CancellationToken cancellationToken)
     {
+        // Module 9 matrix: the division performance report is its own capability
+        // (divisions:reports.view); reports:view alone must not expose it.
+        if (!await CanReadReportTypeAsync(filter))
+        {
+            return Forbid();
+        }
+
         var result = await reportingService.GenerateAsync(filter, ResolveRequestedBy(), cancellationToken);
         return Ok(result);
     }
@@ -45,6 +56,11 @@ public class ReportsController : ControllerBase
         [FromBody] ReportFilter filter,
         CancellationToken cancellationToken)
     {
+        if (!await CanReadReportTypeAsync(filter))
+        {
+            return Forbid();
+        }
+
         var exportFormat = ResolveExportFormat(format);
         var bytes = await reportingService.ExportAsync(filter, exportFormat, ResolveRequestedBy(), cancellationToken);
 
@@ -57,6 +73,17 @@ public class ReportsController : ControllerBase
 
         var fileName = SanitizeFileName($"{filter.ReportType}-{DateTime.UtcNow:yyyyMMddHHmm}.{extension}");
         return File(bytes, contentType, fileName);
+    }
+
+    private async Task<bool> CanReadReportTypeAsync(ReportFilter filter)
+    {
+        if (!string.Equals(filter.ReportType, "division-performance", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var result = await authorizationService.AuthorizeAsync(User, Permissions.DivisionReportsView);
+        return result.Succeeded;
     }
 
     private static ReportExportFormat ResolveExportFormat(string? format)

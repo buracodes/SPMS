@@ -132,7 +132,6 @@ public class SoftDeleteQueryFilterTests
             Username = "shadow.owner",
             Email = "shadow.owner@spms.local",
             FullName = "Shadow Owner",
-            PasswordHash = "not-a-real-hash",
             IsActive = true
         };
         var initiative = new Initiative

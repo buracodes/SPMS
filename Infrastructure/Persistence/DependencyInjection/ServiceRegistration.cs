@@ -36,12 +36,13 @@ namespace Infrastructure.Persistence.DependencyInjection
                     .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
             );
 
-            services.AddDbContext<hrDbContext>((serviceProvider, options) =>
+            services.AddDbContext<hrDbContext>(options =>
                 options.UseSqlServer(configuration.GetConnectionString("hrConnection"))
-                    .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
             );
 
             services.Configure<LdapSettings>(configuration.GetSection("LdapSettings"));
+            services.Configure<HrPositionAccessOptions>(configuration.GetSection(HrPositionAccessOptions.SectionName));
+            services.AddMemoryCache();
 
             services.AddScoped<IUnitOfWork, SpmsUnitOfWork>();
             services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));    
@@ -75,11 +76,11 @@ namespace Infrastructure.Persistence.DependencyInjection
             services.AddScoped<IInitiativeDependencyRepository, InitiativeDependencyRepository>();
 
             services.AddScoped<IUserRepository, UserRepository>();
+            services.AddScoped<IHRInfoRepository, HRInfoRepository>();
             services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
             services.AddScoped<IRbacRepository, RbacRepository>();
             services.AddScoped<IEffectivePermissionService, EffectivePermissionService>();
-
-            services.AddScoped<IPasswordHasher, PasswordHasherService>();
+            services.AddScoped<IPositionPermissionProvider, HrPositionPermissionProvider>();
 
             services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
             services.AddScoped<ITokenService, JwtTokenService>();
@@ -92,7 +93,6 @@ namespace Infrastructure.Persistence.DependencyInjection
             services.AddTransient<DivisionScoreRecalculationJob>();
             services.AddTransient<ScoreSnapshotReconciliationJob>();
             services.AddScoped<ISpmsRecurringJobRegistrar, SpmsRecurringJobRegistrar>();
-            services.AddScoped<IAccessControl, AccessControlRepository>();
 
             return services;
         }

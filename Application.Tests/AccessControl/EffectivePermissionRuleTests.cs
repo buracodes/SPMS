@@ -1,6 +1,8 @@
 using Application.CQRS.AccessControl;
 using Application.CQRS.AccessControl.Handlers.Commands;
+using Application.CQRS.AccessControl.Handlers.Queries;
 using Application.CQRS.AccessControl.Requests.Commands;
+using Application.CQRS.AccessControl.Requests.Queries;
 using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
@@ -108,6 +110,40 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
         await harness.AddGroupRightAsync("KPI Readers", Permissions.KpiView, PermissionEffect.Deny);
         await harness.AddMembershipAsync(olivia, "KPI Readers");
         await harness.AddUserRightAsync(olivia, Permissions.KpiView, PermissionEffect.Grant);
+
+        var grants = await harness.Effective.GetEffectiveGrantNamesAsync(olivia);
+        var detail = await harness.Effective.EvaluateDetailedAsync(olivia);
+        var entry = detail.Rights.First(r => r.PermissionName == Permissions.KpiView);
+
+        Assert.DoesNotContain(Permissions.KpiView, grants);
+        Assert.Equal("Denied", entry.Result);
+        Assert.Equal("Group Assignment", entry.Source);
+        Assert.True(entry.HasExplicitDeny);
+    }
+
+    [Fact]
+    public async Task PositionGrantAppliesWhenNothingDenies()
+    {
+        var harness = await RbacHarness.CreateAsync(lease, new FixedPositionGrants(Permissions.KpiView));
+        var olivia = await harness.GetUserIdAsync("olivia");
+
+        var grants = await harness.Effective.GetEffectiveGrantNamesAsync(olivia);
+        var detail = await harness.Effective.EvaluateDetailedAsync(olivia);
+        var entry = detail.Rights.First(r => r.PermissionName == Permissions.KpiView);
+
+        Assert.Contains(Permissions.KpiView, grants);
+        Assert.Equal("Granted", entry.Result);
+        Assert.Equal("Position Assignment", entry.Source);
+        Assert.False(entry.HasExplicitDeny);
+    }
+
+    [Fact]
+    public async Task GroupDenyOverridesPositionGrant()
+    {
+        var harness = await RbacHarness.CreateAsync(lease, new FixedPositionGrants(Permissions.KpiView));
+        var olivia = await harness.GetUserIdAsync("olivia");
+        await harness.AddGroupRightAsync("KPI Readers", Permissions.KpiView, PermissionEffect.Deny);
+        await harness.AddMembershipAsync(olivia, "KPI Readers");
 
         var grants = await harness.Effective.GetEffectiveGrantNamesAsync(olivia);
         var detail = await harness.Effective.EvaluateDetailedAsync(olivia);
@@ -304,6 +340,98 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
             CancellationToken.None));
     }
 
+    // ── Removed assignments ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task RemovedGroupRightDisappearsFromTheRightsRead()
+    {
+        var harness = await RbacHarness.CreateDefaultAdminScenario(lease);
+        var readersRoleId = await harness.GetRoleIdAsync("KPI Readers");
+        var kpiViewId = await harness.GetPermissionIdAsync(Permissions.KpiView);
+
+        await harness.GrantGroupRightAsync(readersRoleId, kpiViewId);
+        await harness.Handlers.Handle(
+            new RemoveGroupRightCommandRequest { GroupId = readersRoleId, RightId = kpiViewId, Reason = "cleanup" },
+            CancellationToken.None);
+
+        var rights = await harness.Queries.Handle(
+            new GetGroupRightsQueryRequest { GroupId = readersRoleId }, CancellationToken.None);
+
+        Assert.Empty(rights.Data!);
+    }
+
+    [Fact]
+    public async Task RemovedGroupRightCanBeGrantedAgain()
+    {
+        var harness = await RbacHarness.CreateDefaultAdminScenario(lease);
+        var olivia = await harness.GetUserIdAsync("olivia");
+        var readersRoleId = await harness.GetRoleIdAsync("KPI Readers");
+        var kpiViewId = await harness.GetPermissionIdAsync(Permissions.KpiView);
+        await harness.AddMembershipAsync(olivia, "KPI Readers");
+
+        await harness.GrantGroupRightAsync(readersRoleId, kpiViewId);
+        await harness.Handlers.Handle(
+            new RemoveGroupRightCommandRequest { GroupId = readersRoleId, RightId = kpiViewId, Reason = "cleanup" },
+            CancellationToken.None);
+        Assert.DoesNotContain(Permissions.KpiView, await harness.Effective.GetEffectiveGrantNamesAsync(olivia));
+
+        await harness.GrantGroupRightAsync(readersRoleId, kpiViewId);
+
+        var rows = await harness.Context.RolePermissions.IgnoreQueryFilters().AsNoTracking()
+            .Where(rp => rp.RoleId == readersRoleId && rp.PermissionId == kpiViewId)
+            .ToListAsync();
+        var row = Assert.Single(rows);
+        Assert.False(row.IsDeleted);
+        Assert.Equal(EntityStatus.Active, row.Status);
+        Assert.Contains(Permissions.KpiView, await harness.Effective.GetEffectiveGrantNamesAsync(olivia));
+    }
+
+    [Fact]
+    public async Task RemovingAnAlreadyRemovedGroupRightIsNotFound()
+    {
+        var harness = await RbacHarness.CreateDefaultAdminScenario(lease);
+        var readersRoleId = await harness.GetRoleIdAsync("KPI Readers");
+        var kpiViewId = await harness.GetPermissionIdAsync(Permissions.KpiView);
+
+        await harness.GrantGroupRightAsync(readersRoleId, kpiViewId);
+        await harness.Handlers.Handle(
+            new RemoveGroupRightCommandRequest { GroupId = readersRoleId, RightId = kpiViewId, Reason = "cleanup" },
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => harness.Handlers.Handle(
+            new RemoveGroupRightCommandRequest { GroupId = readersRoleId, RightId = kpiViewId, Reason = "again" },
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RemovedMembershipCanBeAssignedAgain()
+    {
+        var harness = await RbacHarness.CreateDefaultAdminScenario(lease);
+        var olivia = await harness.GetUserIdAsync("olivia");
+        var readersRoleId = await harness.GetRoleIdAsync("KPI Readers");
+        await harness.AddGroupRightAsync("KPI Readers", Permissions.KpiView, PermissionEffect.Grant);
+
+        await harness.Handlers.Handle(
+            new AssignGroupMembershipCommandRequest { GroupId = readersRoleId, UserId = olivia },
+            CancellationToken.None);
+        await harness.Handlers.Handle(
+            new RemoveGroupMembershipCommandRequest { GroupId = readersRoleId, UserId = olivia, Reason = "cleanup" },
+            CancellationToken.None);
+        Assert.DoesNotContain(Permissions.KpiView, await harness.Effective.GetEffectiveGrantNamesAsync(olivia));
+
+        await harness.Handlers.Handle(
+            new AssignGroupMembershipCommandRequest { GroupId = readersRoleId, UserId = olivia },
+            CancellationToken.None);
+
+        var rows = await harness.Context.UserRoles.IgnoreQueryFilters().AsNoTracking()
+            .Where(ur => ur.UserId == olivia && ur.RoleId == readersRoleId)
+            .ToListAsync();
+        var row = Assert.Single(rows);
+        Assert.False(row.IsDeleted);
+        Assert.Equal(EntityStatus.Active, row.Status);
+        Assert.Contains(Permissions.KpiView, await harness.Effective.GetEffectiveGrantNamesAsync(olivia));
+    }
+
     // ── Harness ───────────────────────────────────────────────────────────
 
     private sealed class SqliteLease : IAsyncDisposable
@@ -339,19 +467,23 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
 
         public AccessControlCommandHandlers Handlers { get; private set; } = null!;
 
+        public AccessControlQueryHandlers Queries { get; private set; } = null!;
+
         private readonly SqliteLease lease;
 
-        private RbacHarness(SqliteLease lease)
+        private RbacHarness(SqliteLease lease, IPositionPermissionProvider positionPermissions)
         {
             this.lease = lease;
             Context = lease.Context;
             Rbac = new RbacRepository(Context);
-            Effective = new EffectivePermissionService(Context);
+            Effective = new EffectivePermissionService(Context, positionPermissions);
         }
 
-        public static async Task<RbacHarness> CreateAsync(SqliteLease lease)
+        public static async Task<RbacHarness> CreateAsync(
+            SqliteLease lease,
+            IPositionPermissionProvider? positionPermissions = null)
         {
-            var harness = new RbacHarness(lease);
+            var harness = new RbacHarness(lease, positionPermissions ?? new NoPositionGrants());
             await harness.SeedAsync();
             return harness;
         }
@@ -388,8 +520,17 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
                 new GenericRepository<Permission>(harness.Context),
                 new GenericRepository<UserRight>(harness.Context),
                 new GenericRepository<User>(harness.Context),
+                new UserRepository(harness.Context),
+                new TestHrInfoRepository(),
                 harness.AdministratorService,
                 new AuditContext());
+
+            harness.Queries = new AccessControlQueryHandlers(
+                harness.Rbac,
+                new GenericRepository<Permission>(harness.Context),
+                new GenericRepository<UserRight>(harness.Context),
+                harness.Effective,
+                new AuditLogEntryRepository(harness.Context));
             return harness;
         }
 
@@ -446,7 +587,6 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
                     Id = Guid.NewGuid(),
                     Username = username,
                     FullName = fullName,
-                    PasswordHash = "test-hash",
                     IsActive = true,
                     Status = EntityStatus.Active,
                     CreatedBy = Guid.NewGuid(),
@@ -524,6 +664,11 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
             await Context.SaveChangesAsync();
         }
 
+        public Task GrantGroupRightAsync(Guid roleId, Guid permissionId) =>
+            Handlers.Handle(
+                new SetGroupRightCommandRequest { GroupId = roleId, RightId = permissionId, Effect = PermissionEffect.Grant },
+                CancellationToken.None);
+
         public async Task DeactivateRoleAsync(string roleName)
         {
             var role = await Context.Roles.IgnoreQueryFilters().FirstAsync(r => r.Name == roleName);
@@ -556,6 +701,26 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
             user.UpdatedDate = DateTime.UtcNow;
             await Context.SaveChangesAsync();
         }
+    }
+
+    /// <summary>Position mapping is opt-in; tests run with it disabled unless they pass grants.</summary>
+    private sealed class NoPositionGrants : IPositionPermissionProvider
+    {
+        public Task<IReadOnlySet<string>> GetGrantedPermissionsAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlySet<string>>(new HashSet<string>());
+    }
+
+    private sealed class FixedPositionGrants : IPositionPermissionProvider
+    {
+        private readonly IReadOnlySet<string> grants;
+
+        public FixedPositionGrants(params string[] grants) =>
+            this.grants = new HashSet<string>(grants, StringComparer.OrdinalIgnoreCase);
+
+        public Task<IReadOnlySet<string>> GetGrantedPermissionsAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(grants);
     }
 
     public ValueTask DisposeAsync() => lease.DisposeAsync();

@@ -31,6 +31,9 @@ public class GetGroupMembershipQueryRequest : IRequest<Response<List<GroupMember
 {
     /// <summary>All memberships for the page when null; otherwise one group's members.</summary>
     public Guid? GroupId { get; set; }
+
+    /// <summary>One employee's group memberships, for the member picker's right-hand card.</summary>
+    public Guid? UserId { get; set; }
 }
 
 public class GetGroupRightsQueryRequest : IRequest<Response<List<GroupRightRowDto>>>

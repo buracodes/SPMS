@@ -23,7 +23,7 @@ public interface IRbacRepository
     /// <summary>Roles with their rights (role-permission rows and permission definitions).</summary>
     Task<IReadOnlyList<Role>> GetAllRolesWithRightsAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>One role with its rights and member count graph.</summary>
+    /// <summary>One role with its rights and membership graph, including removed rows so writes can revive them (composite keys); reads must filter IsDeleted/Status.</summary>
     Task<Role?> GetRoleWithRightsAsync(Guid roleId, CancellationToken cancellationToken = default);
 
     /// <summary>Direct rights of one user, with their permission rows.</summary>
@@ -45,7 +45,4 @@ public interface IRbacRepository
     /// stayed enforced) — the hypothetical used by group-right, membership and status guards.
     /// </summary>
     Task<int> CountActiveAdministratorsExcludingRoleAsync(Guid roleId, CancellationToken cancellationToken = default);
-
-    /// <summary>Names of permissions a role currently grants (effect Grant), for reference checks.</summary>
-    Task<IReadOnlyList<string>> GetRoleGrantedPermissionNamesAsync(Guid roleId, CancellationToken cancellationToken = default);
 }

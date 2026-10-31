@@ -60,7 +60,7 @@ namespace Application.CQRS.Division.Handlers.Queries
             {
                 request.DivisionId = organizationalScope.DivisionId;
             }
-            else if (!await organizationalScope.HasCorporateAccessAsync(cancellationToken))
+            else if (!await organizationalScope.HasDivisionPortfolioAccessAsync(cancellationToken))
             {
                 throw new ForbiddenException(
                     "A division must be specified and you do not have access to view division plans across divisions.");
