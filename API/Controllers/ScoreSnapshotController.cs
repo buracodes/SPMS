@@ -25,7 +25,7 @@ namespace API.Controllers
         }
 
         [HttpGet]
-        [Authorize(Policy = Permissions.DashboardView)]
+        [Authorize(Policy = Permissions.ScorecardView)]
         public async Task<ActionResult> Get(
             [FromQuery] Guid scorecardId, 
             [FromQuery] Guid fiscalYearId,

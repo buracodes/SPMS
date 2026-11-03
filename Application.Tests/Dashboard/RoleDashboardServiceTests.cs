@@ -38,6 +38,14 @@ public class RoleDashboardServiceTests
         Permissions.OrganizationView
     };
 
+    /// <summary>The view-only baseline every active HR employee receives.</summary>
+    private static readonly string[] DivisionBaselinePermissions =
+    {
+        Permissions.DashboardView, Permissions.OrganizationView,
+        Permissions.DivisionScorecardView, Permissions.DivisionPerformanceView,
+        Permissions.DivisionInitiativeView
+    };
+
     /// <summary>Mirrors the permission set the seeder grants the view only role.</summary>
     private static readonly string[] ViewOnlyPermissions =
     {
@@ -46,9 +54,27 @@ public class RoleDashboardServiceTests
         Permissions.DivisionView, Permissions.ReportsView, Permissions.OrganizationView
     };
 
-    private static RoleDashboardService CreateService(TestDbContextLease lease, TestCurrentUserService user)
+    private static RoleDashboardService CreateService(
+        TestDbContextLease lease,
+        TestCurrentUserService user,
+        TestEffectivePermissionService? effectivePermissions = null)
     {
         var context = lease.Context;
+
+        // The dashboard resolves permissions live. Unless a test supplies its own live state
+        // (to simulate a revocation), seed it from the claims the test declared so existing
+        // composition tests keep exercising the same permission set.
+        if (effectivePermissions is null)
+        {
+            effectivePermissions = new TestEffectivePermissionService();
+            if (user.UserId is Guid liveUserId)
+            {
+                foreach (var permission in user.Permissions)
+                {
+                    effectivePermissions.Grant(liveUserId, permission);
+                }
+            }
+        }
         var factory = new ScoreStrategyFactory();
         var clock = TestBusinessClock.Real();
         var scorePeriod = new ScorePeriodCalculationService(
@@ -105,7 +131,8 @@ public class RoleDashboardServiceTests
             clock,
             new RagThresholdService(
                 new RagThresholdConfigRepository(context),
-                new SpmsUnitOfWork(context)));
+                new SpmsUnitOfWork(context)),
+            effectivePermissions);
     }
 
     private static async Task<FiscalYear> SeedYearAsync(TestDbContextLease lease, int calendarYear = 2026)
@@ -240,6 +267,56 @@ public class RoleDashboardServiceTests
         await lease.Context.SaveChangesAsync();
     }
 
+    private static async Task<(Division Division, DivisionPlan Plan, DivisionGoal Goal, Kpi Kpi)> SeedDivisionPlanAsync(
+        TestDbContextLease lease, Guid scorecardId, Guid parentGoalId, string divisionName = "Operations")
+    {
+        var division = new Division
+        {
+            Id = Guid.NewGuid(),
+            Name = divisionName,
+            Code = divisionName[..Math.Min(3, divisionName.Length)].ToUpperInvariant(),
+            IsActive = true
+        };
+
+        var plan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = division.Id,
+            ScorecardId = scorecardId,
+            PlanStatus = DivisionPlanStatus.Finalized
+        };
+
+        var goal = new DivisionGoal
+        {
+            Id = Guid.NewGuid(),
+            DivisionPlanId = plan.Id,
+            ParentGoalId = parentGoalId,
+            Name = divisionName + " delivery goal",
+            Weight = 100m
+        };
+
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecardId,
+            DivisionGoalId = goal.Id,
+            Name = divisionName + " throughput",
+            Weight = 100m,
+            Unit = "units",
+            IsActive = true,
+            OptimizationType = KpiOptimizationType.Maximize,
+            KpiType = KpiType.Lagging
+        };
+
+        lease.Context.Divisions.Add(division);
+        lease.Context.DivisionPlans.Add(plan);
+        lease.Context.DivisionGoals.Add(goal);
+        lease.Context.Kpis.Add(kpi);
+        await lease.Context.SaveChangesAsync();
+
+        return (division, plan, goal, kpi);
+    }
+
     [Fact]
     public async Task Target_vs_actual_groups_by_unit_using_identical_period_boundaries()
     {
@@ -273,8 +350,11 @@ public class RoleDashboardServiceTests
         Assert.Equal(new decimal?[] { 1200m, 10m }, chart.Series[0].Values.ToArray());
         Assert.Equal(new decimal?[] { 960m, null }, chart.Series[1].Values.ToArray());
 
-        // A unit without any entered actuals is grey, never a misleading zero bar.
-        Assert.Equal("slate", chart.CategoryColors[1]);
+        // The actual series takes the configured RAG band: 80% is Amber under the FR-607
+        // thresholds (95/70). A unit without any entered actuals is NoData, never Red.
+        Assert.True(chart.Series[1].UseCategoryColors);
+        Assert.Equal(DashboardRag.Amber, chart.CategoryColors[0]);
+        Assert.Equal(DashboardRag.NoData, chart.CategoryColors[1]);
 
         Assert.Equal("2", chart.Cards.Single(c => c.Key == "targets").Value);
         Assert.Equal("1", chart.Cards.Single(c => c.Key == "actuals").Value);
@@ -496,6 +576,376 @@ public class RoleDashboardServiceTests
         var drilldown = await service.GetGoalDrilldownAsync(secondGoal.Id, null);
         Assert.Equal(string.Empty, drilldown.GoalName);
         Assert.Empty(drilldown.Kras);
+    }
+
+    [Fact]
+    public async Task Division_baseline_dashboard_reads_the_divisions_own_plan_only()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (scorecardId, corporateGoal, corporateKpi, corporateOtherKpi) =
+            await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        var (division, _, divisionGoal, divisionKpi) =
+            await SeedDivisionPlanAsync(lease, scorecardId, corporateGoal.Id);
+        await SeedMonthlyTargetsAsync(lease, year, divisionKpi.Id, monthlyTarget: 100m, withActuals: true);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.ViewOnly },
+            Permissions = DivisionBaselinePermissions,
+            DivisionId = division.Id
+        };
+
+        var service = CreateService(lease, user);
+        var context = await service.GetContextAsync(new() { PeriodType = "Year" });
+
+        Assert.Equal("Division", context.DataScope);
+        Assert.True(context.ReadOnly);
+        Assert.Equal("DivisionView", context.Role);
+        Assert.Contains(context.Scorecards, option => option.Id == scorecardId);
+        Assert.DoesNotContain(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetAssignedKpis);
+        Assert.DoesNotContain(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetDataEntryStatus);
+        Assert.DoesNotContain(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetPeriodLocks);
+        Assert.DoesNotContain(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetDivisionComparison);
+        Assert.DoesNotContain(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetGoalHealth);
+
+        var widgets = await service.GetWidgetsAsync(new() { PeriodType = "Year" });
+
+        Assert.Null(widgets.AssignedKpis);
+        Assert.Null(widgets.DataEntryStatus);
+        Assert.Null(widgets.PeriodLocks);
+        Assert.Null(widgets.GoalHealth);
+
+        Assert.Equal(80m, widgets.OverallScore!.Value);
+
+        var goals = widgets.GoalPerformance!;
+        var goalRow = Assert.Single(goals.Rows);
+        Assert.Equal(divisionGoal.Name, goalRow.Cells["goal"]);
+        Assert.Equal("/division-planning/" + scorecardId + "?divisionId=" + division.Id, goalRow.Route);
+
+        var scorecard = Assert.Single(widgets.ScorecardPerformance!.Rows);
+        Assert.Equal("/division-planning/" + scorecardId + "?divisionId=" + division.Id, scorecard.Route);
+
+        // The division KPI's 80 score is Amber under the configured thresholds; the chart
+        // colours the actual bar with that band rather than a hardcoded red/green rule.
+        var comparison = widgets.TargetVsActual!;
+        Assert.Equal(new[] { "units" }, comparison.Categories);
+        Assert.True(comparison.Series[1].UseCategoryColors);
+        Assert.Equal(DashboardRag.Amber, comparison.CategoryColors[0]);
+
+        var trend = widgets.KpiPerformanceTrend!;
+        var series = Assert.Single(trend.Series);
+        Assert.Contains(divisionKpi.Name, series.Name);
+        Assert.Contains(series.Values, value => value == 80m);
+
+        // No corporate goal or KPI may leak into a division scoped payload.
+        var serialized = System.Text.Json.JsonSerializer.Serialize(widgets);
+        Assert.DoesNotContain(corporateGoal.Name, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(corporateKpi.Name, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(corporateOtherKpi.Name, serialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Division_baseline_opens_its_own_goal_drilldown_without_goals_view()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (scorecardId, corporateGoal, corporateKpi, corporateOtherKpi) =
+            await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        var (division, _, divisionGoal, divisionKpi) =
+            await SeedDivisionPlanAsync(lease, scorecardId, corporateGoal.Id);
+        await SeedMonthlyTargetsAsync(lease, year, divisionKpi.Id, monthlyTarget: 100m, withActuals: true);
+
+        // The baseline employee holds no corporate goals:view right at all.
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.ViewOnly },
+            Permissions = DivisionBaselinePermissions,
+            DivisionId = division.Id
+        };
+
+        var service = CreateService(lease, user);
+
+        var widgets = await service.GetWidgetsAsync(new() { PeriodType = "Year" });
+        var row = Assert.Single(widgets.GoalPerformance!.Rows);
+
+        // The row carries the goal id so the shell can open the drawer for a division goal.
+        Assert.Equal(divisionGoal.Id.ToString(), row.Id);
+
+        var drilldown = await service.GetGoalDrilldownAsync(divisionGoal.Id, new() { PeriodType = "Year" });
+
+        // Division Goal -> KPI directly, with no corporate KRA layer.
+        Assert.True(drilldown.IsDivisionGoal);
+        Assert.Equal(divisionGoal.Name, drilldown.GoalName);
+        Assert.Empty(drilldown.Kras);
+
+        var kpi = Assert.Single(drilldown.Kpis);
+        Assert.Equal(divisionKpi.Name, kpi.Name);
+        Assert.Equal(80m, kpi.Score);
+        Assert.True(kpi.HasData);
+        Assert.Equal(DashboardRag.Amber, kpi.RagLabel);
+
+        var serialized = System.Text.Json.JsonSerializer.Serialize(drilldown);
+        Assert.DoesNotContain(corporateGoal.Name, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(corporateKpi.Name, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(corporateOtherKpi.Name, serialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Division_drilldown_returns_empty_for_corporate_and_sibling_goal_ids()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (scorecardId, corporateGoal, _, _) =
+            await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        var (divisionA, _, goalA, _) =
+            await SeedDivisionPlanAsync(lease, scorecardId, corporateGoal.Id, "Alpha");
+        var (_, _, goalB, _) =
+            await SeedDivisionPlanAsync(lease, scorecardId, corporateGoal.Id, "Beta");
+
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.ViewOnly },
+            Permissions = DivisionBaselinePermissions,
+            DivisionId = divisionA.Id
+        };
+
+        var service = CreateService(lease, user);
+
+        // A corporate goal id and a sibling division's goal id must not resolve through the
+        // division endpoint, even though both are reachable from other endpoints.
+        foreach (var foreignGoalId in new[] { corporateGoal.Id, goalB.Id })
+        {
+            var foreign = await service.GetGoalDrilldownAsync(foreignGoalId, new() { PeriodType = "Year" });
+            Assert.Equal(string.Empty, foreign.GoalName);
+            Assert.False(foreign.IsDivisionGoal);
+            Assert.Empty(foreign.Kras);
+            Assert.Empty(foreign.Kpis);
+        }
+
+        var own = await service.GetGoalDrilldownAsync(goalA.Id, new() { PeriodType = "Year" });
+        Assert.Equal(goalA.Name, own.GoalName);
+        Assert.True(own.IsDivisionGoal);
+        Assert.Single(own.Kpis);
+    }
+
+    [Fact]
+    public async Task Division_drilldown_fails_closed_without_a_division_read_permission()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (scorecardId, corporateGoal, _, _) =
+            await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+        var (division, _, divisionGoal, _) =
+            await SeedDivisionPlanAsync(lease, scorecardId, corporateGoal.Id);
+
+        // Dashboard access plus a division claim is not enough: the caller still needs one
+        // of the division read rights to open a division goal.
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.ViewOnly },
+            Permissions = new[] { Permissions.DashboardView, Permissions.OrganizationView },
+            DivisionId = division.Id
+        };
+
+        var service = CreateService(lease, user);
+
+        await Assert.ThrowsAsync<Application.Exceptions.UnauthorizedException>(
+            () => service.GetGoalDrilldownAsync(divisionGoal.Id, new() { PeriodType = "Year" }));
+    }
+
+    [Fact]
+    public async Task Corporate_goal_drilldown_keeps_the_kra_hierarchy()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (_, secondGoal, _, someoneElse) = await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.Executive },
+            Permissions = ExecutivePermissions
+        };
+
+        var drilldown = await CreateService(lease, user)
+            .GetGoalDrilldownAsync(secondGoal.Id, new() { PeriodType = "Year" });
+
+        Assert.False(drilldown.IsDivisionGoal);
+        Assert.Equal(secondGoal.Name, drilldown.GoalName);
+        Assert.Empty(drilldown.Kpis);
+
+        var kra = Assert.Single(drilldown.Kras);
+        Assert.Equal("Service Quality", kra.Name);
+        Assert.Equal(someoneElse.Name, Assert.Single(kra.Kpis).Name);
+    }
+
+    [Fact]
+    public async Task Multi_division_dashboard_lists_and_opens_scorecards_from_each_authorized_division()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (scorecardA, corporateGoalA, _, _) =
+            await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        var (divisionA, _, goalA, kpiA) =
+            await SeedDivisionPlanAsync(lease, scorecardA, corporateGoalA.Id, "Alpha");
+        await SeedMonthlyTargetsAsync(lease, year, kpiA.Id, monthlyTarget: 100m, withActuals: true);
+
+        // A second corporate scorecard planned only by the caller's secondary division.
+        var scorecardB = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "ECX Secondary Strategy",
+            Scope = ScorecardScope.Corporate,
+            ScorecardStatus = ScorecardStatus.Active
+        };
+        var corporateGoalB = new Goal
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecardB.Id,
+            Name = "Secondary Corporate Goal",
+            Weight = 100m
+        };
+        lease.Context.Scorecards.Add(scorecardB);
+        lease.Context.Goals.Add(corporateGoalB);
+        await lease.Context.SaveChangesAsync();
+
+        var (divisionB, _, goalB, kpiB) =
+            await SeedDivisionPlanAsync(lease, scorecardB.Id, corporateGoalB.Id, "Beta");
+        await SeedMonthlyTargetsAsync(lease, year, kpiB.Id, monthlyTarget: 50m, withActuals: true);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.ViewOnly },
+            Permissions = DivisionBaselinePermissions,
+            DivisionIds = new[] { divisionA.Id, divisionB.Id }
+        };
+
+        var service = CreateService(lease, user);
+        var context = await service.GetContextAsync(new() { PeriodType = "Year" });
+
+        Assert.Equal("Division", context.DataScope);
+        Assert.Contains(context.Scorecards, option => option.Id == scorecardA);
+        Assert.Contains(context.Scorecards, option => option.Id == scorecardB.Id);
+
+        // The primary division backs the default scorecard, but requesting the secondary
+        // division's scorecard must resolve that division's plan instead of returning empty.
+        var widgets = await service.GetWidgetsAsync(new()
+        {
+            ScorecardId = scorecardB.Id,
+            PeriodType = "Year"
+        });
+
+        var row = Assert.Single(widgets.GoalPerformance!.Rows);
+        Assert.Equal(goalB.Name, row.Cells["goal"]);
+        Assert.Equal(
+            "/division-planning/" + scorecardB.Id + "?divisionId=" + divisionB.Id,
+            row.Route);
+        Assert.DoesNotContain(goalA.Name, System.Text.Json.JsonSerializer.Serialize(widgets), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Division_data_entry_right_adds_task_widgets_without_organization_visibility()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (scorecardId, corporateGoal, _, _) = await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        var (division, _, divisionGoal, divisionKpi) =
+            await SeedDivisionPlanAsync(lease, scorecardId, corporateGoal.Id);
+        await SeedMonthlyTargetsAsync(lease, year, divisionKpi.Id, monthlyTarget: 100m, withActuals: false);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            Roles = new[] { Roles.DataInputUser },
+            Permissions = DivisionBaselinePermissions
+                .Concat(new[] { Permissions.ActualsView, Permissions.DivisionActualsEnter })
+                .ToArray(),
+            DivisionId = division.Id
+        };
+
+        var service = CreateService(lease, user);
+        var context = await service.GetContextAsync(null);
+        var widgets = await service.GetWidgetsAsync(null);
+
+        Assert.Equal("Division", context.DataScope);
+        Assert.False(context.ReadOnly);
+        Assert.Equal(Roles.DataInputUser, context.Role);
+
+        Assert.Contains(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetAssignedKpis);
+        Assert.Contains(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetDataEntryStatus);
+        Assert.Contains(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetPeriodLocks);
+        Assert.DoesNotContain(context.Widgets, w => w.Key == DashboardRoleCatalog.WidgetDivisionComparison);
+
+        var tasks = widgets.AssignedKpis!;
+        var row = Assert.Single(tasks.Rows);
+        Assert.Equal(divisionGoal.Name, row.Cells["goal"]);
+        Assert.Contains(tasks.Columns, column => column.Key == "deadline");
+        Assert.Contains(tasks.Columns, column => column.Key == "action");
+
+        var entryStatus = Assert.IsType<Application.DTOS.Dashboard.CompositeWidgetDto>(widgets.DataEntryStatus);
+        Assert.NotEmpty(entryStatus.Rows);
+        Assert.All(entryStatus.Columns, column => Assert.Contains(column.Key, entryStatus.Rows[0].Cells.Keys));
+
+        Assert.NotNull(widgets.PeriodLocks);
+    }
+
+    [Fact]
+    public async Task Kpi_performance_trend_tracks_the_highest_weight_kpis_in_scope()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (_, _, mine, someoneElse) = await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+
+        await SeedMonthlyTargetsAsync(lease, year, mine.Id, monthlyTarget: 100m, withActuals: true);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            Roles = new[] { Roles.Executive },
+            Permissions = ExecutivePermissions
+        };
+
+        var widgets = await CreateService(lease, user).GetWidgetsAsync(new() { PeriodType = "Year" });
+        var trend = widgets.KpiPerformanceTrend!;
+
+        Assert.NotEmpty(trend.Categories);
+        Assert.Equal(2, trend.Series.Count);
+        Assert.Equal("%", trend.ValueSuffix);
+
+        var revenue = trend.Series.Single(series => series.Name == mine.Name);
+        Assert.Contains(revenue.Values, value => value == 80m);
+
+        // A KPI with no actuals keeps its line but has no points, so it is not counted as Red.
+        var noData = trend.Series.Single(series => series.Name == someoneElse.Name);
+        Assert.All(noData.Values, value => Assert.Null(value));
     }
 
     [Fact]
@@ -726,5 +1176,90 @@ public class RoleDashboardServiceTests
 
         var restocked = await CreateService(lease, user).GetWidgetsAsync(new() { PeriodType = "Year" });
         Assert.Equal(DashboardRag.Red, restocked.OverallScore!.RagLabel);
+    }
+
+    [Fact]
+    public async Task Live_revocation_overrides_stale_permission_claims_in_dashboard_composition()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (_, _, mine, _) = await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+        await SeedMonthlyTargetsAsync(lease, year, mine.Id, monthlyTarget: 100m, withActuals: true);
+
+        // The access token still carries the executive claims; only the live grant table matters.
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.Executive },
+            Permissions = ExecutivePermissions
+        };
+
+        var live = new TestEffectivePermissionService();
+        foreach (var permission in ExecutivePermissions)
+        {
+            live.Grant(owner.Id, permission);
+        }
+
+        var granted = await CreateService(lease, user, live).GetContextAsync(new() { PeriodType = "Year" });
+        Assert.Equal("OrganizationWide", granted.DataScope);
+        Assert.Contains(granted.Widgets, w => w.Key == DashboardRoleCatalog.WidgetScorecardHealth);
+
+        // Revoking a broad read right must recompose the dashboard on the very next request,
+        // even though the stale JWT claim is still present.
+        live.Revoke(owner.Id, Permissions.ScorecardView);
+
+        var revokedService = CreateService(lease, user, live);
+        var revokedContext = await revokedService.GetContextAsync(new() { PeriodType = "Year" });
+        var revokedWidgets = await revokedService.GetWidgetsAsync(new() { PeriodType = "Year" });
+
+        Assert.Equal("AssignedOnly", revokedContext.DataScope);
+        Assert.NotEqual(Roles.Executive, revokedContext.Role);
+        Assert.DoesNotContain(revokedContext.Widgets, w => w.Key == DashboardRoleCatalog.WidgetScorecardHealth);
+        Assert.DoesNotContain(revokedContext.Widgets, w => w.Key == DashboardRoleCatalog.WidgetDivisionComparison);
+        Assert.Null(revokedWidgets.ScorecardPerformance);
+        Assert.Null(revokedWidgets.ScorecardHealth);
+        Assert.Null(revokedWidgets.OverallScore);
+
+        // Re-granting restores the same composition; nothing was cached from the revoked state.
+        live.Grant(owner.Id, Permissions.ScorecardView);
+        var restored = await CreateService(lease, user, live).GetContextAsync(new() { PeriodType = "Year" });
+        Assert.Equal("OrganizationWide", restored.DataScope);
+    }
+
+    [Fact]
+    public async Task Revoked_goals_view_claim_cannot_open_the_corporate_goal_drilldown()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var owner = await SeedUserAsync(lease, "owner@spms.et", "Owner");
+        var other = await SeedUserAsync(lease, "other@spms.et", "Other");
+        var (_, goal, mine, _) = await SeedHierarchyAsync(lease, year, owner.Id, other.Id);
+        await SeedMonthlyTargetsAsync(lease, year, mine.Id, monthlyTarget: 100m, withActuals: true);
+
+        var user = new TestCurrentUserService
+        {
+            UserId = owner.Id,
+            Roles = new[] { Roles.Executive },
+            Permissions = ExecutivePermissions
+        };
+
+        var live = new TestEffectivePermissionService();
+        foreach (var permission in ExecutivePermissions.Where(p => p != Permissions.GoalsView))
+        {
+            live.Grant(owner.Id, permission);
+        }
+
+        var service = CreateService(lease, user, live);
+
+        // The token says goals:view but the live grant table has revoked it, so the protected
+        // drill-down endpoint must fail closed exactly as it would for a fresh token.
+        await Assert.ThrowsAsync<Application.Exceptions.UnauthorizedException>(
+            () => service.GetGoalDrilldownAsync(goal.Id, null));
+
+        live.Grant(owner.Id, Permissions.GoalsView);
+        var drilldown = await CreateService(lease, user, live).GetGoalDrilldownAsync(goal.Id, null);
+        Assert.Equal(goal.Name, drilldown.GoalName);
     }
 }

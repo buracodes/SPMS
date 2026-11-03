@@ -19,7 +19,8 @@ public enum AccessSource : byte
     None = 0,
     DirectUserAssignment = 1,
     GroupAssignment = 2,
-    PositionAssignment = 3
+    PositionAssignment = 3,
+    SystemBaseline = 4
 }
 
 /// <summary>Collection counts shown on the Access Control summary cards.</summary>

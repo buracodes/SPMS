@@ -448,7 +448,8 @@ namespace Infrastructure.Persistence.Repositories
             var sql = @"
    SELECT DISTINCT
        os.Id AS Id,
-       os.Name AS Name
+       os.Name AS Name,
+       os.Status AS Status
    FROM OrganizationalStracture os
    INNER JOIN Position p ON p.OrgStrId = os.Id
    WHERE os.Name IS NOT NULL

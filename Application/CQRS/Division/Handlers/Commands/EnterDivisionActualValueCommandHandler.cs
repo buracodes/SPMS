@@ -8,6 +8,7 @@ using Application.Responses;
 using Domain.Entities;
 using Domain.Enums;
 using MediatR;
+using System.Linq;
 
 namespace Application.CQRS.Division.Handlers.Commands;
 
@@ -53,9 +54,13 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
             throw new BadRequestException("Actual value data is required.");
         }
 
-        if (currentUserService.DivisionId.HasValue && currentUserService.DivisionId.Value != dto.DivisionId)
+        // The authorization scope is the whole set of divisions the caller may access, not
+        // the payload. A corporate caller (empty scope) is still fenced by the plan-member
+        // check below; a division caller may only target one of its authorized divisions.
+        var divisionScope = currentUserService.DivisionIds;
+        if (divisionScope.Count > 0 && !divisionScope.Contains(dto.DivisionId))
         {
-            throw new ForbiddenException("A division account can only enter actual values for its own division.");
+            throw new ForbiddenException("A division account can only enter actual values for its authorized divisions.");
         }
 
         var division = await divisionRepository.GetById(dto.DivisionId);
@@ -68,6 +73,13 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
         if (kpi == null || kpi.DivisionGoalId == null)
         {
             throw new BadRequestException("The specified KPI is not a division KPI.");
+        }
+
+        // Eligibility precedes every ownership/lock rule: an inactive KPI is excluded
+        // from scoring, so accepting an actual for it would silently disappear.
+        if (!kpi.IsActive)
+        {
+            throw new BadRequestException("This KPI is inactive and cannot accept actual values.");
         }
 
         var divisionPlan = await divisionPlanRepository.GetByDivisionAndScorecardAsync(dto.DivisionId, kpi.ScorecardId);

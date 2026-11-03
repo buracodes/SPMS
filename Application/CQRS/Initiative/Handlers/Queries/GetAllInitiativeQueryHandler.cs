@@ -1,7 +1,9 @@
 using Application.CQRS.Initiative.Requests.Queries;
 using Application.Dashboard;
 using Application.DTOS.Initiative;
+using Application.Exceptions;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Domain.Calculation;
 using MediatR;
 
@@ -17,28 +19,40 @@ public class GetAllInitiativeQueryHandler : IRequestHandler<GetAllInitiativeQuer
     private readonly IInitiativeRepository initiativeRepository;
     private readonly IInitiativeProgressCalculator progressCalculator;
     private readonly IInitiativeBudgetCalculator budgetCalculator;
-    private readonly Application.Interface.IService.IRagThresholdService ragThresholdService;
+    private readonly IRagThresholdService ragThresholdService;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     public GetAllInitiativeQueryHandler(
         IInitiativeRepository _initiativeRepository,
         IInitiativeProgressCalculator _progressCalculator,
         IInitiativeBudgetCalculator _budgetCalculator,
-        Application.Interface.IService.IRagThresholdService _ragThresholdService)
+        IRagThresholdService _ragThresholdService,
+        IOrganizationalScopeService _organizationalScope)
     {
         initiativeRepository = _initiativeRepository;
         progressCalculator = _progressCalculator;
         budgetCalculator = _budgetCalculator;
         ragThresholdService = _ragThresholdService;
+        organizationalScope = _organizationalScope;
     }
 
     public async Task<PagedInitiativeDto> Handle(GetAllInitiativeQuery request, CancellationToken cancellationToken)
     {
+        var scopeDivisionIds = organizationalScope.DivisionIds;
+        if (scopeDivisionIds.Count == 0 && !await organizationalScope.CanAccessInitiativePortfolioAsync(cancellationToken))
+        {
+            throw new ForbiddenException("You do not have access to the initiative portfolio.");
+        }
+
         var query = new InitiativeListQuery
         {
             Search = request.Search,
             Status = request.Status,
             Priority = request.Priority,
             OwnerId = request.OwnerId,
+            DivisionOwnerId = request.DivisionOwnerId,
+            ScopeDivisionIds = scopeDivisionIds,
+            ScopeOwnerId = scopeDivisionIds.Count > 0 ? organizationalScope.UserId : null,
             IncludeClosed = request.IncludeClosed,
             Page = request.Page,
             PageSize = request.PageSize,
@@ -68,6 +82,8 @@ public class GetAllInitiativeQueryHandler : IRequestHandler<GetAllInitiativeQuer
                 ActualExpenditure = row.ActualExpenditure,
                 OwnerId = row.OwnerId,
                 OwnerName = row.OwnerName,
+                DivisionOwnerId = row.DivisionOwnerId,
+                DivisionOwnerName = row.DivisionOwnerName,
                 GoalId = row.GoalId,
                 KraId = row.KraId,
                 KpiId = row.KpiId,

@@ -47,6 +47,7 @@ public class InitiativeConfiguration : IEntityTypeConfiguration<Initiative>
 
         builder.HasIndex(i => i.Status);
         builder.HasIndex(i => i.OwnerId);
+        builder.HasIndex(i => i.DivisionOwnerId);
 
         // Strategic links are optional (FR-401): Restrict so deleting a Goal/KRA/KPI cannot
         // silently orphan or cascade-delete execution history.
@@ -68,6 +69,11 @@ public class InitiativeConfiguration : IEntityTypeConfiguration<Initiative>
         builder.HasOne(i => i.Owner)
             .WithMany()
             .HasForeignKey(i => i.OwnerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(i => i.DivisionOwner)
+            .WithMany()
+            .HasForeignKey(i => i.DivisionOwnerId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

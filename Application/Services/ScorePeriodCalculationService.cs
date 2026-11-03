@@ -74,7 +74,13 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
         var scope = ScorePeriodScopeResolver.Resolve(periodType, quarter, fromMonth, toMonth, currentFiscalMonth);
 
         var goals = await goalRepository.GetByScorecardAsync(scorecardId);
-        var kpis = await kpiRepository.GetByScorecardAsync(scorecardId);
+        // Division KPIs share the corporate scorecard id but are reported by the division
+        // plan. Keeping them out of the corporate result prevents them from appearing in
+        // corporate KPI snapshots; corporate goal/KRA/scorecard rollups only read KraId
+        // KPIs and corporate goals, so their scores are unchanged.
+        var kpis = (await kpiRepository.GetByScorecardAsync(scorecardId))
+            .Where(k => k.DivisionGoalId == null)
+            .ToList();
         var targets = await kpiTargetRepository.GetForScorecardFiscalYearAsync(scorecardId, fiscalYearId);
         var actuals = await kpiActualValueRepository.GetForScorecardFiscalYearAsync(scorecardId, fiscalYearId);
 

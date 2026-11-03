@@ -22,9 +22,15 @@ public class InitiativeDto
 
     public string? KpiName { get; set; }
 
-    public Guid OwnerId { get; set; }
+    /// <summary>Individual owner. Null when the initiative is owned by a division.</summary>
+    public Guid? OwnerId { get; set; }
 
     public string? OwnerName { get; set; }
+
+    /// <summary>Division owner. Null when the initiative is owned by an individual.</summary>
+    public Guid? DivisionOwnerId { get; set; }
+
+    public string? DivisionOwnerName { get; set; }
 
     public InitiativePriority Priority { get; set; }
 

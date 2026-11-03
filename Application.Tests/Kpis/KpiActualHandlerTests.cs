@@ -60,7 +60,8 @@ public class KpiActualHandlerTests
                 actualRepo,
                 currentUserService ?? new TestCurrentUserService(),
                 new TestSpmsJobScheduler(),
-                new AuditContext()),
+                new AuditContext(),
+                new TestEffectivePermissionService()),
             new GetActualValuesQueryHandler(
                 new KpiRepository(lease.Context),
                 new FiscalYearRepository(lease.Context),
@@ -109,7 +110,8 @@ public class KpiActualHandlerTests
             actualRepo,
             new TestCurrentUserService(),
             scheduler,
-            new AuditContext());
+            new AuditContext(),
+            new TestEffectivePermissionService());
 
         await enter.Handle(new EnterActualValueCommandRequest
         {
@@ -223,6 +225,29 @@ public class KpiActualHandlerTests
             {
                 Dto = new EnterActualValueDto { KpiId = Guid.NewGuid(), FiscalPeriodId = period.Id, Value = 1 }
             }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task EnterActualValue_InactiveKpi_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (_, _, _, kpiId) = CreateFixture(lease);
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.Id == kpiId);
+        kpi.IsActive = false;
+        await lease.Context.SaveChangesAsync();
+
+        var (enter, _, _) = CreateHandlers(lease);
+
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            enter.Handle(new EnterActualValueCommandRequest
+            {
+                Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 10 }
+            }, CancellationToken.None));
+
+        Assert.Contains("inactive", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
     }
 
     [Fact]

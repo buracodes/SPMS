@@ -14,13 +14,22 @@ namespace Application.CQRS.ScoreSnapshot.Handlers.Queries
     {
         private readonly IScorecardRepository _scorecardRepository;
         private readonly IScorePeriodCalculationService _scorePeriodCalculationService;
+        private readonly IDivisionPlanRepository _divisionPlanRepository;
+        private readonly IDivisionPeriodCalculationService _divisionPeriodCalculationService;
+        private readonly IOrganizationalScopeService _organizationalScope;
 
         public GetScoreSnapshotsQueryHandler(
             IScorecardRepository scorecardRepository,
-            IScorePeriodCalculationService scorePeriodCalculationService)
+            IScorePeriodCalculationService scorePeriodCalculationService,
+            IDivisionPlanRepository divisionPlanRepository,
+            IDivisionPeriodCalculationService divisionPeriodCalculationService,
+            IOrganizationalScopeService organizationalScope)
         {
             _scorecardRepository = scorecardRepository;
             _scorePeriodCalculationService = scorePeriodCalculationService;
+            _divisionPlanRepository = divisionPlanRepository;
+            _divisionPeriodCalculationService = divisionPeriodCalculationService;
+            _organizationalScope = organizationalScope;
         }
 
         public async Task<Response<GetScoreSnapshotsDto>> Handle(
@@ -34,15 +43,65 @@ namespace Application.CQRS.ScoreSnapshot.Handlers.Queries
                 throw new BadRequestException(
                     "The requested fiscal year does not match the scorecard's fiscal year.");
 
-            var result = await _scorePeriodCalculationService.CalculateAsync(
-                request.ScorecardId,
-                request.FiscalYearId,
-                request.PeriodType,
-                request.Quarter,
-                request.FromMonth,
-                request.ToMonth,
-                request.Year,
-                cancellationToken);
+            // A division claim is authoritative: the employee only ever reads snapshots for a
+            // scorecard one of their authorized divisions plans on, and only that division's
+            // KPI/goal scores are projected back.
+            var divisionIds = _organizationalScope.DivisionIds;
+            ScorePeriodResult result;
+            if (divisionIds.Count > 0)
+            {
+                Domain.Entities.DivisionPlan? plan = null;
+                foreach (var divisionId in divisionIds)
+                {
+                    var plans = await _divisionPlanRepository.GetByDivisionAsync(divisionId);
+                    plan = plans.FirstOrDefault(p => p.ScorecardId == scorecard.Id);
+                    if (plan != null)
+                    {
+                        break;
+                    }
+                }
+
+                if (plan == null)
+                {
+                    throw new ForbiddenException("You do not have access to this scorecard.");
+                }
+
+                var divisionResult = await _divisionPeriodCalculationService.CalculateAsync(
+                    plan.Id,
+                    request.ScorecardId,
+                    request.FiscalYearId,
+                    request.PeriodType,
+                    request.Quarter,
+                    request.FromMonth,
+                    request.ToMonth,
+                    request.Year,
+                    cancellationToken);
+
+                result = new ScorePeriodResult
+                {
+                    Scope = divisionResult.Scope,
+                    Kpis = divisionResult.Kpis,
+                    Kras = new Dictionary<Guid, EntityScorePeriod>(),
+                    Goals = divisionResult.DivisionGoals,
+                    Scorecards = new Dictionary<Guid, EntityScorePeriod>
+                    {
+                        [request.ScorecardId] = new() { PeriodScore = divisionResult.OverallScore }
+                    },
+                    FiscalPeriodByMonth = divisionResult.FiscalPeriodByMonth
+                };
+            }
+            else
+            {
+                result = await _scorePeriodCalculationService.CalculateAsync(
+                    request.ScorecardId,
+                    request.FiscalYearId,
+                    request.PeriodType,
+                    request.Quarter,
+                    request.FromMonth,
+                    request.ToMonth,
+                    request.Year,
+                    cancellationToken);
+            }
 
             var now = DateTime.UtcNow;
             var kpiSnapshots = BuildKpiSnapshots(result, now);

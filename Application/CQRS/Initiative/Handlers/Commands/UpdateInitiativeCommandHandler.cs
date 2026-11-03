@@ -66,9 +66,14 @@ public class UpdateInitiativeCommandHandler : IRequestHandler<UpdateInitiativeCo
             initiative.Description = request.Description;
         }
 
-        if (request.OwnerId.HasValue)
+        // Setting one owner clears the other, so an initiative never carries a stale pair.
+        // Omitting both leaves the current ownership untouched.
+        if (request.OwnerId.HasValue || request.DivisionOwnerId.HasValue)
         {
-            initiative.OwnerId = request.OwnerId.Value;
+            await guard.ValidateOwnerAssignmentAsync(request.OwnerId, request.DivisionOwnerId);
+
+            initiative.OwnerId = request.OwnerId;
+            initiative.DivisionOwnerId = request.DivisionOwnerId;
         }
 
 // Strategic links: Guid? cannot distinguish "field omitted" from "explicitly cleared".

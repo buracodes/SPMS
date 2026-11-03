@@ -21,6 +21,6 @@ public class UpdateKpiValidator : AbstractValidator<UpdateKpiCommandRequest>
 
         RuleFor(x => x)
             .Must(x => !(x.OwnerId.HasValue && x.DivisionOwnerId.HasValue))
-            .WithMessage("A KPI can be owned by a user or a division, not both.");
+            .WithMessage("A KPI can be owned by an individual employee or a division, not both.");
     }
 }

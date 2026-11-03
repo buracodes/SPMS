@@ -19,6 +19,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
         private readonly ICurrentUserService currentUserService;
         private readonly ISpmsJobScheduler jobScheduler;
         private readonly IAuditContext auditContext;
+        private readonly IEffectivePermissionService effectivePermissionService;
 
         public EnterActualValueCommandHandler(
             IKpiRepository _kpiRepository,
@@ -26,7 +27,8 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
             IKpiActualValueRepository _kpiActualValueRepository,
             ICurrentUserService _currentUserService,
             ISpmsJobScheduler _jobScheduler,
-            IAuditContext _auditContext)
+            IAuditContext _auditContext,
+            IEffectivePermissionService _effectivePermissionService)
         {
             kpiRepository = _kpiRepository;
             fiscalPeriodRepository = _fiscalPeriodRepository;
@@ -34,6 +36,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
             currentUserService = _currentUserService;
             jobScheduler = _jobScheduler;
             auditContext = _auditContext;
+            effectivePermissionService = _effectivePermissionService;
         }
 
         public async Task<Response<ActualValueDto>> Handle(EnterActualValueCommandRequest request, CancellationToken cancellationToken)
@@ -50,7 +53,15 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
                 throw new NotFoundException(nameof(Kpi), dto.KpiId);
             }
 
-            KpiActualWriteGuard.EnsureWriteAllowed(kpi, currentUserService);
+            // Eligibility precedes every ownership/lock rule: an inactive KPI is excluded
+            // from scoring, so accepting an actual for it would silently disappear.
+            if (!kpi.IsActive)
+            {
+                throw new BadRequestException("This KPI is inactive and cannot accept actual values.");
+            }
+
+            await KpiActualWriteGuard.EnsureWriteAllowedAsync(
+                kpi, currentUserService, effectivePermissionService, cancellationToken);
 
             var period = await fiscalPeriodRepository.GetById(dto.FiscalPeriodId);
             if (period == null)

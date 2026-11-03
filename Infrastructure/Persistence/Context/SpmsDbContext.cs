@@ -9,11 +9,14 @@ using System.Text;
 
 namespace Infrastructure.Persistence.Context
 {
+    public partial class hrDbContext
+    {
+    }
+
     public class SpmsDbContext : DbContext
     {
         public SpmsDbContext(DbContextOptions<SpmsDbContext> options) : base(options)
         {
-            
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -38,54 +41,33 @@ namespace Infrastructure.Persistence.Context
             }
         }
 
-        protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+        private void ApplySoftDeleteQueryFilter(Type entityType, ModelBuilder modelBuilder)
         {
-            base.ConfigureConventions(configurationBuilder);
-            configurationBuilder.Properties<decimal>().HavePrecision(18, 4);
+            var method = typeof(SpmsDbContext).GetMethod(nameof(ApplySoftDeleteQueryFilterGeneric),
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            var genericMethod = method!.MakeGenericMethod(entityType);
+            genericMethod.Invoke(this, new object[] { modelBuilder });
         }
 
-        private static void ApplySoftDeleteQueryFilter(Type entityType, ModelBuilder modelBuilder)
+        private void ApplySoftDeleteQueryFilterGeneric<TEntity>(ModelBuilder modelBuilder) where TEntity : CommonEntity
         {
-            var method = typeof(SpmsDbContext)
-                .GetMethod(nameof(SetSoftDeleteQueryFilter), BindingFlags.NonPublic | BindingFlags.Static)
-                ?.MakeGenericMethod(entityType);
-            method?.Invoke(null, new object[] { modelBuilder });
+            modelBuilder.Entity<TEntity>().HasQueryFilter(e => !e.IsDeleted && e.Status != EntityStatus.Inactive);
         }
 
-        // A record leaves the UI when it is deactivated, never when its row is removed. Two flags can
-        // express that, and both are honoured: IsDeleted (set by GenericRepository.Delete for every
-        // entity) and the generic EntityStatus lifecycle flag, where the entity has one, moving from
-        // Active (1) to Inactive (0). Initiative and Milestone shadow Status with their execution
-        // enums, where 0 is not a valid value, so for them the comparison is always true and only
-        // IsDeleted takes effect.
-        private static void SetSoftDeleteQueryFilter<TEntity>(ModelBuilder modelBuilder)
-            where TEntity : CommonEntity
+        private void ConfigureRowVersion(Type entityType, ModelBuilder modelBuilder, string? providerName)
         {
-            modelBuilder.Entity<TEntity>()
-                .HasQueryFilter(e => !e.IsDeleted && e.Status != EntityStatus.Inactive);
-        }
-
-        private static void ConfigureRowVersion(Type entityType, ModelBuilder modelBuilder, string? providerName)
-        {
-            var method = typeof(SpmsDbContext)
-                .GetMethod(nameof(SetRowVersion), BindingFlags.NonPublic | BindingFlags.Static)
-                ?.MakeGenericMethod(entityType);
-            method?.Invoke(null, new object?[] { modelBuilder, providerName });
-        }
-
-        private static void SetRowVersion<TEntity>(ModelBuilder modelBuilder, string? providerName)
-            where TEntity : CommonEntity
-        {
-            var property = modelBuilder.Entity<TEntity>()
-                .Property(e => e.RowVersion);
-
-            if (providerName == "Microsoft.EntityFrameworkCore.Sqlite")
+            if (string.IsNullOrWhiteSpace(providerName))
             {
-                property.IsConcurrencyToken();
                 return;
             }
 
-            property.IsRowVersion();
+            if (providerName.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
+            {
+                var entityBuilder = modelBuilder.Entity(entityType);
+                entityBuilder.Property("RowVersion")
+                    .IsRowVersion()
+                    .IsConcurrencyToken();
+            }
         }
 
         public DbSet<Goal> Goals { get; set; }
@@ -118,6 +100,7 @@ namespace Infrastructure.Persistence.Context
         public DbSet<GoalScoreSnapshot> GoalScoreSnapshots { get; set; }
         public DbSet<ScorecardScoreSnapshot> ScorecardScoreSnapshots { get; set; }
         public DbSet<Division> Divisions { get; set; }
+        public DbSet<UserDivisionScope> UserDivisionScopes { get; set; }
         public DbSet<DivisionPlan> DivisionPlans { get; set; }
         public DbSet<DivisionContribution> DivisionContributions { get; set; }
         public DbSet<DivisionGoal> DivisionGoals { get; set; }
@@ -148,8 +131,7 @@ namespace Infrastructure.Persistence.Context
         }
     }
 
-    /// <summary>Read-only window onto the external HR database, queried through Database.SqlQueryRaw. No SPMS entity may be mapped here, or SPMS tables would point at the HR server.</summary>
-    public class hrDbContext : DbContext
+    public partial class hrDbContext : DbContext
     {
         public hrDbContext(DbContextOptions<hrDbContext> options) : base(options)
         {

@@ -53,6 +53,67 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
         Assert.Empty(grants);
     }
 
+    // ── Automatic HR baseline ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task ActiveHrEmployeeReceivesBaselineWithoutAnyAssignment()
+    {
+        var harness = await RbacHarness.CreateAsync(
+            lease,
+            employeeAccess: TestEmployeeAccessResolver.ActiveInDivision(Guid.NewGuid()));
+        var olivia = await harness.GetUserIdAsync("olivia");
+
+        var grants = await harness.Effective.GetEffectiveGrantNamesAsync(olivia);
+        var detail = await harness.Effective.EvaluateDetailedAsync(olivia);
+        var baselineEntry = detail.Rights.First(r => r.PermissionName == Permissions.DivisionScorecardView);
+        var corporateEntry = detail.Rights.First(r => r.PermissionName == Permissions.ScorecardView);
+
+        Assert.Equal(Permissions.BaselinePermissions.OrderBy(p => p), grants.OrderBy(p => p));
+        Assert.Equal("Granted", baselineEntry.Result);
+        Assert.Equal("System Baseline", baselineEntry.Source);
+        Assert.False(baselineEntry.HasExplicitDeny);
+        Assert.Equal("Denied", corporateEntry.Result);
+        Assert.DoesNotContain(Permissions.ActualsEnter, grants);
+        Assert.DoesNotContain(Permissions.InitiativesEdit, grants);
+        Assert.DoesNotContain(Permissions.AdminAccessView, grants);
+    }
+
+    [Fact]
+    public async Task ExplicitDenyOverridesBaselineRight()
+    {
+        var harness = await RbacHarness.CreateAsync(
+            lease,
+            employeeAccess: TestEmployeeAccessResolver.ActiveInDivision(Guid.NewGuid()));
+        var olivia = await harness.GetUserIdAsync("olivia");
+        await harness.AddUserRightAsync(olivia, Permissions.OrganizationView, PermissionEffect.Deny);
+
+        var grants = await harness.Effective.GetEffectiveGrantNamesAsync(olivia);
+        var detail = await harness.Effective.EvaluateDetailedAsync(olivia);
+        var entry = detail.Rights.First(r => r.PermissionName == Permissions.OrganizationView);
+
+        Assert.DoesNotContain(Permissions.OrganizationView, grants);
+        Assert.Equal("Denied", entry.Result);
+        Assert.True(entry.HasExplicitDeny);
+        // The rest of the baseline is untouched by a single deny.
+        Assert.Contains(Permissions.DashboardView, grants);
+        Assert.Contains(Permissions.DivisionPerformanceView, grants);
+    }
+
+    [Fact]
+    public async Task HrBaselineIsUnavailableWhenTheEmployeeIsNotActiveInHr()
+    {
+        // The resolver fails closed (None) for an HR outage, a non-employee identity, or an
+        // employee without an active position; no baseline may survive that state.
+        var harness = await RbacHarness.CreateAsync(
+            lease,
+            employeeAccess: new TestEmployeeAccessResolver());
+        var olivia = await harness.GetUserIdAsync("olivia");
+
+        var grants = await harness.Effective.GetEffectiveGrantNamesAsync(olivia);
+
+        Assert.Empty(grants);
+    }
+
     [Fact]
     public async Task DirectGrantIsEffective()
     {
@@ -471,19 +532,23 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
 
         private readonly SqliteLease lease;
 
-        private RbacHarness(SqliteLease lease, IPositionPermissionProvider positionPermissions)
+        private RbacHarness(
+            SqliteLease lease,
+            IPositionPermissionProvider positionPermissions,
+            IEmployeeAccessResolver employeeAccess)
         {
             this.lease = lease;
             Context = lease.Context;
             Rbac = new RbacRepository(Context);
-            Effective = new EffectivePermissionService(Context, positionPermissions);
+            Effective = new EffectivePermissionService(Context, positionPermissions, employeeAccess);
         }
 
         public static async Task<RbacHarness> CreateAsync(
             SqliteLease lease,
-            IPositionPermissionProvider? positionPermissions = null)
+            IPositionPermissionProvider? positionPermissions = null,
+            IEmployeeAccessResolver? employeeAccess = null)
         {
-            var harness = new RbacHarness(lease, positionPermissions ?? new NoPositionGrants());
+            var harness = new RbacHarness(lease, positionPermissions ?? new NoPositionGrants(), employeeAccess ?? new TestEmployeeAccessResolver());
             await harness.SeedAsync();
             return harness;
         }
@@ -540,6 +605,11 @@ public class EffectivePermissionRuleTests : IAsyncDisposable
             {
                 Permissions.KpiView,
                 Permissions.KpiEdit,
+                Permissions.ScorecardView,
+                Permissions.OrganizationView,
+                Permissions.DivisionScorecardView,
+                Permissions.DashboardView,
+                Permissions.DivisionPerformanceView,
                 Permissions.AdminUsersManage,
                 Permissions.AdminRolesManage
             })

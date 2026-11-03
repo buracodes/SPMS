@@ -3,6 +3,7 @@ using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Domain.Calculation;
 using Domain.Entities;
+using System.Linq;
 
 namespace Application.CQRS.Initiative;
 
@@ -17,6 +18,7 @@ public sealed class InitiativeGuard
     private readonly IKraRepository kraRepository;
     private readonly IKpiRepository kpiRepository;
     private readonly IUserRepository userRepository;
+    private readonly IDivisionRepository divisionRepository;
     private readonly ICurrentUserService currentUserService;
 
     public InitiativeGuard(
@@ -24,12 +26,14 @@ public sealed class InitiativeGuard
         IKraRepository kraRepository,
         IKpiRepository kpiRepository,
         IUserRepository userRepository,
+        IDivisionRepository divisionRepository,
         ICurrentUserService currentUserService)
     {
         this.goalRepository = goalRepository;
         this.kraRepository = kraRepository;
         this.kpiRepository = kpiRepository;
         this.userRepository = userRepository;
+        this.divisionRepository = divisionRepository;
         this.currentUserService = currentUserService;
     }
 
@@ -96,6 +100,54 @@ public sealed class InitiativeGuard
                     "The selected KPI is a division KPI and cannot be linked without a corporate KRA.");
             }
         }
+    }
+
+    /// <summary>
+    /// An initiative has exactly one owner: an active individual user or an active division.
+    /// Ownership is validated here so create and update enforce the same rule.
+    /// </summary>
+    public async Task ValidateOwnerAssignmentAsync(Guid? ownerId, Guid? divisionOwnerId)
+    {
+        if (ownerId.HasValue == divisionOwnerId.HasValue)
+        {
+            throw new BadRequestException(
+                "An initiative must be owned by exactly one owner: an individual user or a division.");
+        }
+
+        if (ownerId.HasValue)
+        {
+            var owner = await userRepository.GetById(ownerId.Value);
+            if (owner == null || !owner.IsActive)
+            {
+                throw new BadRequestException("The selected initiative owner is not an active user.");
+            }
+        }
+
+        if (divisionOwnerId.HasValue)
+        {
+            var division = await divisionRepository.GetById(divisionOwnerId.Value);
+            if (division == null || !division.IsActive)
+            {
+                throw new BadRequestException("The selected initiative division owner is not an active division.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the caller is the initiative's owner: the assigned individual, or a member of the
+    /// division that owns it. Division ownership grants no permissions — it only satisfies the
+    /// owner checks below, exactly like individual ownership.
+    /// </summary>
+    private bool IsAssignedOwner(Domain.Entities.Initiative initiative)
+    {
+        var userId = currentUserService.UserId;
+        if (userId.HasValue && initiative.OwnerId.HasValue && userId.Value == initiative.OwnerId.Value)
+        {
+            return true;
+        }
+
+        var divisionId = initiative.DivisionOwnerId;
+        return divisionId.HasValue && currentUserService.DivisionIds.Contains(divisionId.Value);
     }
 
     /// <summary>FR-401: budget figures may never be negative.</summary>
@@ -279,7 +331,7 @@ public sealed class InitiativeGuard
             return;
         }
 
-        if (currentUserService.UserId.HasValue && currentUserService.UserId.Value == initiative.OwnerId)
+        if (IsAssignedOwner(initiative))
         {
             return;
         }
@@ -395,7 +447,7 @@ public sealed class InitiativeGuard
             return;
         }
 
-        if (currentUserService.UserId.HasValue && currentUserService.UserId.Value == initiative.OwnerId)
+        if (IsAssignedOwner(initiative))
         {
             return;
         }
@@ -476,7 +528,7 @@ public sealed class InitiativeGuard
             return;
         }
 
-        if (currentUserService.UserId.HasValue && currentUserService.UserId.Value == initiative.OwnerId)
+        if (IsAssignedOwner(initiative))
         {
             return;
         }
@@ -519,7 +571,7 @@ public sealed class InitiativeGuard
             return;
         }
 
-        if (currentUserService.UserId.HasValue && currentUserService.UserId.Value == initiative.OwnerId)
+        if (IsAssignedOwner(initiative))
         {
             return;
         }
@@ -537,7 +589,7 @@ public sealed class InitiativeGuard
             return;
         }
 
-        if (currentUserService.UserId.HasValue && currentUserService.UserId.Value == initiative.OwnerId)
+        if (IsAssignedOwner(initiative))
         {
             return;
         }
@@ -555,7 +607,7 @@ public sealed class InitiativeGuard
             return;
         }
 
-        if (currentUserService.UserId.HasValue && currentUserService.UserId.Value == initiative.OwnerId)
+        if (IsAssignedOwner(initiative))
         {
             return;
         }

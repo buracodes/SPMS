@@ -48,6 +48,7 @@ public class CreateInitiativeCommandHandler : IRequestHandler<CreateInitiativeCo
         InitiativeGuard.ValidateDateRange(request.StartDate, request.EndDate);
         InitiativeGuard.ValidateStartDate(startDate);
         InitiativeGuard.ValidateBudget(request.Budget, 0m);
+        await guard.ValidateOwnerAssignmentAsync(request.OwnerId, request.DivisionOwnerId);
         await guard.ValidateStrategicLinksAsync(request.GoalId, request.KraId, request.KpiId, cancellationToken);
 
         // FRD lifecycle: a new initiative starts Not Started and cannot arrive already completed —
@@ -67,6 +68,7 @@ public class CreateInitiativeCommandHandler : IRequestHandler<CreateInitiativeCo
             KraId = request.KraId,
             KpiId = request.KpiId,
             OwnerId = request.OwnerId,
+            DivisionOwnerId = request.DivisionOwnerId,
             Priority = request.Priority,
             Status = request.Status,
             StartDate = startDate,

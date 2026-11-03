@@ -104,14 +104,37 @@ public class PerformanceMonitoringService : IPerformanceMonitoringService
             return new PerformanceMonitoringDto();
         }
 
-        var scorecard = filter.ScorecardId.HasValue
-            ? await scorecardRepository.GetById(filter.ScorecardId.Value)
-            : (await scorecardRepository.GetAll()).FirstOrDefault(s => s.FiscalYearId == fiscalYear.Id && s.Scope == ScorecardScope.Corporate)
-              ?? (await scorecardRepository.GetAll()).FirstOrDefault(s => s.FiscalYearId == fiscalYear.Id);
+        var scorecard = await ResolveScorecardAsync(fiscalYear, filter, cancellationToken);
 
         if (scorecard == null)
         {
-            return new PerformanceMonitoringDto();
+            if (!organizationalScope.DivisionId.HasValue)
+            {
+                return new PerformanceMonitoringDto();
+            }
+
+            // The employee's division has no plan for this fiscal year yet. Keep the payload
+            // division-scoped so the caller sees an empty view of its own division rather than
+            // no scope at all.
+            var emptyDivision = await divisionRepository.GetById(organizationalScope.DivisionId.Value);
+            var emptyPeriods = await fiscalPeriodRepository.GetByFiscalYearAsync(fiscalYear.Id);
+            return new PerformanceMonitoringDto
+            {
+                Scope = PerformanceScope.Division,
+                FiscalYearId = fiscalYear.Id,
+                FiscalYearName = fiscalYear.Label,
+                DivisionId = organizationalScope.DivisionId,
+                DivisionName = emptyDivision?.Name,
+                PeriodType = filter.PeriodType ?? "Ytd",
+                FiscalPeriods = emptyPeriods.OrderBy(p => p.FiscalMonth).Select(p => new DivisionFiscalPeriodDto
+                {
+                    Id = p.Id,
+                    FiscalMonth = p.FiscalMonth,
+                    Quarter = p.Quarter,
+                    IsQuarterEnd = p.IsQuarterEnd,
+                    IsYearEnd = p.IsYearEnd
+                }).ToList()
+            };
         }
 
         if (scorecard.FiscalYearId != fiscalYear.Id)
@@ -144,13 +167,32 @@ public class PerformanceMonitoringService : IPerformanceMonitoringService
         var allDivisions = await divisionRepository.GetAll();
         var divisionNames = allDivisions.ToDictionary(d => d.Id, d => d.Name);
 
-        if (organizationalScope.DivisionId.HasValue && !hasCorporateAccess)
+        // A division claim is authoritative: even an additionally granted corporate monitoring
+        // right never widens an employee beyond their own division (same rule as the rest of the
+        // division scope service).
+        if (organizationalScope.DivisionIds.Count > 0 && filter.DivisionId.HasValue)
+        {
+            await organizationalScope.EnsureDivisionAsync(filter.DivisionId.Value, cancellationToken);
+            return await GetDivisionAsync(
+                fiscalYear,
+                scorecard,
+                periods,
+                filter.DivisionId.Value,
+                periodType,
+                filter,
+                thresholds,
+                userNames,
+                divisionNames,
+                cancellationToken);
+        }
+
+        if (organizationalScope.DivisionId is Guid primaryDivisionId)
         {
             return await GetDivisionAsync(
                 fiscalYear,
                 scorecard,
                 periods,
-                organizationalScope.DivisionId.Value,
+                primaryDivisionId,
                 periodType,
                 filter,
                 thresholds,
@@ -191,6 +233,49 @@ public class PerformanceMonitoringService : IPerformanceMonitoringService
             divisionNames,
             activeDivisions,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Corporate callers may pick any scorecard for the fiscal year. A division employee is
+    /// pinned to the scorecards their own division plans on: a requested id outside that set is
+    /// rejected instead of silently falling back, so id tampering cannot probe other plans.
+    /// </summary>
+    private async Task<Scorecard?> ResolveScorecardAsync(
+        FiscalYear fiscalYear,
+        PerformanceMonitoringFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var scopeDivisionIds = organizationalScope.DivisionIds;
+        if (scopeDivisionIds.Count == 0)
+        {
+            return filter.ScorecardId.HasValue
+                ? await scorecardRepository.GetById(filter.ScorecardId.Value)
+                : (await scorecardRepository.GetAll()).FirstOrDefault(s => s.FiscalYearId == fiscalYear.Id && s.Scope == ScorecardScope.Corporate)
+                  ?? (await scorecardRepository.GetAll()).FirstOrDefault(s => s.FiscalYearId == fiscalYear.Id);
+        }
+
+        var plans = await divisionPlanRepository.GetByDivisionIdsAsync(scopeDivisionIds);
+        var planScorecardIds = plans.Select(p => p.ScorecardId).ToHashSet();
+
+        if (filter.ScorecardId.HasValue && !planScorecardIds.Contains(filter.ScorecardId.Value))
+        {
+            throw new ForbiddenException("You do not have access to this scorecard.");
+        }
+
+        var scorecardsForYear = (await scorecardRepository.GetAll())
+            .Where(s => s.FiscalYearId == fiscalYear.Id && planScorecardIds.Contains(s.Id))
+            .ToList();
+
+        if (filter.ScorecardId.HasValue)
+        {
+            // The plan check above passed; load the id so a fiscal-year mismatch keeps
+            // returning the existing 400 rather than appearing as missing data.
+            return scorecardsForYear.FirstOrDefault(s => s.Id == filter.ScorecardId.Value)
+                ?? await scorecardRepository.GetById(filter.ScorecardId.Value);
+        }
+
+        return scorecardsForYear.FirstOrDefault(s => s.Scope == ScorecardScope.Corporate)
+            ?? scorecardsForYear.FirstOrDefault();
     }
 
     private async Task<PerformanceMonitoringDto> GetCorporateAsync(

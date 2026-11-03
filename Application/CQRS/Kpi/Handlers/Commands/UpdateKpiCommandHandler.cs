@@ -48,7 +48,7 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
             throw new BadRequestException("A KPI must belong to exactly one parent: a KRA or a division goal, not both.");
 
         if (request.OwnerId.HasValue && request.DivisionOwnerId.HasValue)
-            throw new BadRequestException("A KPI can be owned by a user or a division, not both.");
+            throw new BadRequestException("A KPI can be owned by an individual employee or a division, not both.");
 
         return await unitOfWork.ExecuteInTransactionAsync(async () =>
         {
@@ -78,8 +78,8 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
 
             // Reduce the parent change first so budget/duplicate checks always
             // validate the KPI's final parent, then apply the editable fields.
-            // Choosing a user owner clears a previous division owner and vice versa;
-            // omitting both leaves the current ownership untouched.
+            // Choosing an individual owner clears a previous division owner and vice
+            // versa; omitting both leaves the current ownership untouched.
             if (request.OwnerId.HasValue)
             {
                 kpi.OwnerId = request.OwnerId.Value;
@@ -90,6 +90,11 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
                 kpi.DivisionOwnerId = request.DivisionOwnerId.Value;
                 kpi.OwnerId = null;
             }
+
+            // Ownership is part of the KPI contract: exactly one holder, never a stale pair
+            // and never an unowned KPI after an edit.
+            if (kpi.OwnerId.HasValue == kpi.DivisionOwnerId.HasValue)
+                throw new BadRequestException("A KPI must be owned by exactly one owner: an individual employee or a division.");
 
             if (!string.IsNullOrWhiteSpace(request.Name))
                 kpi.Name = request.Name.Trim();
@@ -207,26 +212,40 @@ public class UpdateKpiCommandHandler : IRequestHandler<UpdateKpiCommandRequest, 
     }
 
     /// <summary>
-    /// KPI owners are picked from HR. An employee who has never signed in has no local row yet,
-    /// so it is created from the verified HR/AD identity mapping before the KPI is saved.
+    /// KPI owners are picked from HR, which is the authoritative source for who may own work.
+    /// An employee who has never signed in has no local row yet, so it is created from the
+    /// verified HR/AD identity mapping before the KPI is saved. The local id is the HR EmpId, so
+    /// repeated assignments always resolve to the same local account and never duplicate Users.
     /// </summary>
     private async Task<Domain.Entities.User> ResolveOwnerAsync(Guid ownerId, CancellationToken cancellationToken)
     {
-        var owner = await userRepository!.GetById(ownerId);
-        if (owner == null && hrInfoRepository != null && currentUserService != null)
+        if (hrInfoRepository != null)
         {
             var employee = await hrInfoRepository.FindActiveEmployeeByIdAsync(ownerId, cancellationToken);
-            if (employee != null)
+            if (employee == null)
             {
-                owner = await userRepository.EnsureEmployeeAccountAsync(
+                throw new BadRequestException("The selected KPI owner is not an active HR employee.");
+            }
+
+            var local = await userRepository!.GetById(ownerId);
+            if (local == null)
+            {
+                local = await userRepository.EnsureEmployeeAccountAsync(
                     ownerId,
                     EmployeeNaming.DisplayName(employee),
                     EmployeeNaming.UsernameHint(employee),
-                    currentUserService.UserId ?? Guid.Empty,
+                    currentUserService?.UserId ?? Guid.Empty,
                     cancellationToken);
             }
+            else if (!local.IsActive)
+            {
+                throw new BadRequestException("The selected KPI owner's SPMS account is inactive.");
+            }
+
+            return local;
         }
 
+        var owner = await userRepository!.GetById(ownerId);
         if (owner == null || !owner.IsActive)
         {
             throw new NotFoundException(nameof(Domain.Entities.User), ownerId);

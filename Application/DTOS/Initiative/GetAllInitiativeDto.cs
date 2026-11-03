@@ -17,6 +17,8 @@ public class GetAllInitiativeDto
     public decimal ActualExpenditure { get; set; }
     public Guid? OwnerId { get; set; }
     public string? OwnerName { get; set; }
+    public Guid? DivisionOwnerId { get; set; }
+    public string? DivisionOwnerName { get; set; }
     public Guid? GoalId { get; set; }
     public Guid? KraId { get; set; }
     public Guid? KpiId { get; set; }

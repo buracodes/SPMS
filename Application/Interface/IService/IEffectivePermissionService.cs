@@ -22,6 +22,13 @@ public interface IEffectivePermissionService
     Task<bool> HasPermissionAsync(Guid userId, string permission, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// True when the user effectively holds at least one of the supplied rights. Used by read
+    /// endpoints that are reachable through either a role grant or a baseline/division right,
+    /// so no endpoint re-implements the precedence rules.
+    /// </summary>
+    Task<bool> HasAnyPermissionAsync(Guid userId, IReadOnlyCollection<string> permissions, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Full explanation table for the Effective Access tab: one entry per catalog right,
     /// computed by the exact precedence the enforcement-time evaluation uses.
     /// </summary>

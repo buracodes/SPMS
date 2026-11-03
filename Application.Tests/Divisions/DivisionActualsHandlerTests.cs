@@ -140,7 +140,8 @@ public class DivisionActualsHandlerTests
         {
             UserId = currentUserService.UserId,
             DivisionId = currentUserService.DivisionId,
-            HasCorporateAccess = !currentUserService.DivisionId.HasValue
+            DivisionIds = currentUserService.DivisionIds,
+            HasCorporateAccess = currentUserService.DivisionIds.Count == 0
         };
 
     [Fact]
@@ -191,6 +192,34 @@ public class DivisionActualsHandlerTests
             }, CancellationToken.None));
 
         Assert.Contains("draft", ex.Message);
+        Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
+    }
+
+    [Fact]
+    public async Task EnterValue_InactiveKpi_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.Id == fixture.KpiId);
+        kpi.IsActive = false;
+        await lease.Context.SaveChangesAsync();
+
+        var account = new TestCurrentUserService { UserId = fixture.DivisionAccountUserId, DivisionId = fixture.DivisionAId };
+        var handler = CreateEnterHandler(lease, account);
+
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            handler.Handle(new EnterDivisionActualValueCommandRequest
+            {
+                Dto = new EnterDivisionActualValueDto
+                {
+                    DivisionId = fixture.DivisionAId,
+                    KpiId = fixture.KpiId,
+                    FiscalPeriodId = fixture.PeriodId,
+                    Value = 5
+                }
+            }, CancellationToken.None));
+
+        Assert.Contains("inactive", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
     }
 
@@ -412,5 +441,183 @@ public class DivisionActualsHandlerTests
 
         Assert.True(response.Success);
         Assert.DoesNotContain(response.Data!, v => v.KpiId == kpiB.Id);
+    }
+
+    private static async Task<Guid> AddFinalizedPlanWithKpiAsync(
+        TestDbContextLease lease, Guid divisionId, Guid scorecardId, Guid parentGoalId)
+    {
+        var plan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = divisionId,
+            ScorecardId = scorecardId,
+            PlanStatus = DivisionPlanStatus.Finalized
+        };
+        var goal = new DivisionGoal
+        {
+            Id = Guid.NewGuid(),
+            DivisionPlanId = plan.Id,
+            ParentGoalId = parentGoalId,
+            Name = "Authorized Division Goal",
+            Weight = 100
+        };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecardId,
+            DivisionGoalId = goal.Id,
+            Name = "Authorized Division KPI",
+            Unit = "count",
+            Weight = 100,
+            DataSource = KpiDataSource.Manual,
+            KpiType = KpiType.Lagging
+        };
+
+        lease.Context.DivisionPlans.Add(plan);
+        lease.Context.DivisionGoals.Add(goal);
+        lease.Context.Kpis.Add(kpi);
+        await lease.Context.SaveChangesAsync();
+
+        return kpi.Id;
+    }
+
+    [Fact]
+    public async Task EnterValue_MultiDivisionAccount_SecondAuthorizedDivision_Succeeds()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+        var parentGoalId = (await lease.Context.Goals.SingleAsync()).Id;
+        var kpiB = await AddFinalizedPlanWithKpiAsync(lease, fixture.DivisionBId, fixture.ScorecardId, parentGoalId);
+
+        var account = new TestCurrentUserService
+        {
+            UserId = fixture.DivisionAccountUserId,
+            DivisionIds = new[] { fixture.DivisionAId, fixture.DivisionBId }
+        };
+
+        var response = await CreateEnterHandler(lease, account).Handle(new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.DivisionBId,
+                KpiId = kpiB,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 11
+            }
+        }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(11, response.Data!.Value);
+        Assert.Equal(fixture.DivisionBId, response.Data.DivisionId);
+    }
+
+    [Fact]
+    public async Task GetValues_MultiDivisionAccount_SecondAuthorizedDivision_ReturnsValues()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+        var parentGoalId = (await lease.Context.Goals.SingleAsync()).Id;
+        var kpiB = await AddFinalizedPlanWithKpiAsync(lease, fixture.DivisionBId, fixture.ScorecardId, parentGoalId);
+
+        var account = new TestCurrentUserService
+        {
+            UserId = fixture.DivisionAccountUserId,
+            DivisionIds = new[] { fixture.DivisionAId, fixture.DivisionBId }
+        };
+
+        await CreateEnterHandler(lease, account).Handle(new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.DivisionBId,
+                KpiId = kpiB,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 13
+            }
+        }, CancellationToken.None);
+
+        var response = await CreateGetHandler(lease, account).Handle(new GetDivisionActualValuesQueryRequest
+        {
+            DivisionId = fixture.DivisionBId,
+            FiscalYearId = fixture.FiscalYearId
+        }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        var entry = Assert.Single(response.Data!);
+        Assert.Equal(kpiB, entry.KpiId);
+        Assert.Equal(13, entry.Value);
+    }
+
+    [Fact]
+    public async Task EnterValue_MultiDivisionAccount_UnauthorizedDivision_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+
+        var account = new TestCurrentUserService
+        {
+            UserId = fixture.DivisionAccountUserId,
+            DivisionIds = new[] { fixture.DivisionAId, fixture.DivisionBId }
+        };
+
+        // The payload's DivisionId is caller-supplied; an id outside the authorized set must
+        // be rejected even when it exists in the database.
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            CreateEnterHandler(lease, account).Handle(new EnterDivisionActualValueCommandRequest
+            {
+                Dto = new EnterDivisionActualValueDto
+                {
+                    DivisionId = Guid.NewGuid(),
+                    KpiId = fixture.KpiId,
+                    FiscalPeriodId = fixture.PeriodId,
+                    Value = 5
+                }
+            }, CancellationToken.None));
+
+        Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
+    }
+
+    [Fact]
+    public async Task EnterValue_RevokedDivisionScope_SecondDivision_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+        var parentGoalId = (await lease.Context.Goals.SingleAsync()).Id;
+        var kpiB = await AddFinalizedPlanWithKpiAsync(lease, fixture.DivisionBId, fixture.ScorecardId, parentGoalId);
+
+        var account = new TestCurrentUserService
+        {
+            UserId = fixture.DivisionAccountUserId,
+            DivisionIds = new[] { fixture.DivisionAId, fixture.DivisionBId }
+        };
+        var handler = CreateEnterHandler(lease, account);
+
+        var allowed = await handler.Handle(new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.DivisionBId,
+                KpiId = kpiB,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 3
+            }
+        }, CancellationToken.None);
+        Assert.True(allowed.Success);
+
+        // The explicit grant for division B is revoked; the next request carries only the
+        // primary HR division, so the same payload is now refused.
+        account.DivisionIds = new[] { fixture.DivisionAId };
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            handler.Handle(new EnterDivisionActualValueCommandRequest
+            {
+                Dto = new EnterDivisionActualValueDto
+                {
+                    DivisionId = fixture.DivisionBId,
+                    KpiId = kpiB,
+                    FiscalPeriodId = fixture.PeriodId,
+                    Value = 4
+                }
+            }, CancellationToken.None));
     }
 }

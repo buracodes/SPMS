@@ -2,6 +2,7 @@ using Application.Exceptions;
 using Application.Interface.IService;
 using Domain.Constants;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,7 +21,16 @@ public class OrganizationalScopeService : IOrganizationalScopeService
         this.effectivePermissions = effectivePermissions;
     }
 
+    public Guid? UserId => currentUserService.UserId;
+
     public Guid? DivisionId => currentUserService.DivisionId;
+
+    public IReadOnlyList<Guid> DivisionIds => currentUserService.DivisionIds;
+
+    private bool HasDivisionScope => currentUserService.DivisionIds.Count > 0;
+
+    private bool IsInDivisionScope(Guid? divisionId)
+        => divisionId.HasValue && currentUserService.DivisionIds.Contains(divisionId.Value);
 
     /// <summary>
     /// Corporate across-division visibility is evaluated against the live authorization
@@ -50,9 +60,9 @@ public class OrganizationalScopeService : IOrganizationalScopeService
             return false;
         }
 
-        // The division claim is authoritative and always wins: division accounts only ever
-        // see their own division, even if a broad read permission is also granted.
-        if (DivisionId.HasValue)
+        // The division scope is authoritative and always wins: division accounts only ever
+        // see their authorized divisions, even if a broad read permission is also granted.
+        if (HasDivisionScope)
         {
             return false;
         }
@@ -75,9 +85,10 @@ public class OrganizationalScopeService : IOrganizationalScopeService
 
     public async Task<bool> CanAccessDivisionAsync(Guid divisionId, CancellationToken cancellationToken = default)
     {
-        // The division claim is the cheapest and most specific check, so try it first and
-        // only consult the live permission state for cross-division access.
-        if (DivisionId.HasValue && DivisionId.Value == divisionId)
+        // The division scope is the cheapest and most specific check, so try it first and
+        // only consult the live permission state for cross-division access. An explicitly
+        // authorized division is accepted exactly like the primary HR division.
+        if (currentUserService.DivisionIds.Contains(divisionId))
         {
             return true;
         }
@@ -98,15 +109,64 @@ public class OrganizationalScopeService : IOrganizationalScopeService
         Guid? divisionOwnerId,
         CancellationToken cancellationToken = default)
     {
-        if (!DivisionId.HasValue)
+        if (!HasDivisionScope)
         {
             return await HasCorporateAccessAsync(cancellationToken);
         }
 
         var userId = currentUserService.UserId;
         var userOwned = ownerId.HasValue && userId.HasValue && ownerId.Value == userId.Value;
-        var divisionOwned = divisionOwnerId.HasValue && divisionOwnerId.Value == DivisionId.Value;
+        var divisionOwned = IsInDivisionScope(divisionOwnerId);
 
         return userOwned || divisionOwned;
+    }
+
+    public async Task<bool> CanAccessInitiativePortfolioAsync(CancellationToken cancellationToken = default)
+    {
+        if (HasDivisionScope)
+        {
+            return false;
+        }
+
+        var userId = currentUserService.UserId;
+        if (!userId.HasValue || userId.Value == Guid.Empty)
+        {
+            return false;
+        }
+
+        return await effectivePermissions.HasPermissionAsync(
+            userId.Value,
+            Permissions.InitiativesView,
+            cancellationToken);
+    }
+
+    public async Task<bool> CanAccessInitiativeAsync(
+        Guid? ownerId,
+        Guid? divisionOwnerId,
+        CancellationToken cancellationToken = default)
+    {
+        // A division scope is authoritative: even a group-granted read right never widens the
+        // employee beyond their own initiatives and their authorized divisions' initiatives.
+        if (!HasDivisionScope)
+        {
+            return await CanAccessInitiativePortfolioAsync(cancellationToken);
+        }
+
+        var userId = currentUserService.UserId;
+        var userOwned = ownerId.HasValue && userId.HasValue && ownerId.Value == userId.Value;
+        var divisionOwned = IsInDivisionScope(divisionOwnerId);
+
+        return userOwned || divisionOwned;
+    }
+
+    public async Task EnsureInitiativeAsync(
+        Guid? ownerId,
+        Guid? divisionOwnerId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await CanAccessInitiativeAsync(ownerId, divisionOwnerId, cancellationToken))
+        {
+            throw new ForbiddenException("You do not have access to this initiative.");
+        }
     }
 }

@@ -65,8 +65,8 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
                 throw new NotFoundException(nameof(KpiEntity), request.ParentKpiId.Value);
         }
 
-        if (request.OwnerId.HasValue && request.DivisionOwnerId.HasValue)
-            throw new BadRequestException("A KPI can be owned by a user or a division, not both.");
+        if (request.OwnerId.HasValue == request.DivisionOwnerId.HasValue)
+            throw new BadRequestException("A KPI must be owned by exactly one owner: an individual employee or a division.");
 
         Domain.Entities.User? owner = null;
         if (request.OwnerId.HasValue && userRepository != null)
@@ -166,26 +166,40 @@ public class CreateKpiCommandHandler : IRequestHandler<CreateKpiCommandRequest, 
     }
 
     /// <summary>
-    /// KPI owners are picked from HR. An employee who has never signed in has no local row yet,
-    /// so it is created from the verified HR/AD identity mapping before the KPI is saved.
+    /// KPI owners are picked from HR, which is the authoritative source for who may own work.
+    /// An employee who has never signed in has no local row yet, so it is created from the
+    /// verified HR/AD identity mapping before the KPI is saved. The local id is the HR EmpId, so
+    /// repeated assignments always resolve to the same local account and never duplicate Users.
     /// </summary>
     private async Task<Domain.Entities.User> ResolveOwnerAsync(Guid ownerId, CancellationToken cancellationToken)
     {
-        var owner = await userRepository!.GetById(ownerId);
-        if (owner == null && hrInfoRepository != null && currentUserService != null)
+        if (hrInfoRepository != null)
         {
             var employee = await hrInfoRepository.FindActiveEmployeeByIdAsync(ownerId, cancellationToken);
-            if (employee != null)
+            if (employee == null)
             {
-                owner = await userRepository.EnsureEmployeeAccountAsync(
+                throw new BadRequestException("The selected KPI owner is not an active HR employee.");
+            }
+
+            var local = await userRepository!.GetById(ownerId);
+            if (local == null)
+            {
+                local = await userRepository.EnsureEmployeeAccountAsync(
                     ownerId,
                     EmployeeNaming.DisplayName(employee),
                     EmployeeNaming.UsernameHint(employee),
-                    currentUserService.UserId ?? Guid.Empty,
+                    currentUserService?.UserId ?? Guid.Empty,
                     cancellationToken);
             }
+            else if (!local.IsActive)
+            {
+                throw new BadRequestException("The selected KPI owner's SPMS account is inactive.");
+            }
+
+            return local;
         }
 
+        var owner = await userRepository!.GetById(ownerId);
         if (owner == null || !owner.IsActive)
         {
             throw new NotFoundException(nameof(Domain.Entities.User), ownerId);

@@ -47,11 +47,11 @@ public class GetAllKpiQueryHandler : IRequestHandler<GetAllKpiQueryRequest, Resp
         // division sees nothing (fail closed).
         if (!await organizationalScope.HasCorporateAccessAsync(cancellationToken))
         {
-            var divisionId = organizationalScope.DivisionId;
-            filtered = divisionId.HasValue
+            var divisionIds = organizationalScope.DivisionIds;
+            filtered = divisionIds.Count > 0
                 ? filtered.Where(k =>
-                    (k.OwnerId.HasValue && k.Owner?.DivisionId == divisionId.Value) ||
-                    (k.DivisionOwnerId.HasValue && k.DivisionOwnerId.Value == divisionId.Value))
+                    (k.OwnerId.HasValue && k.Owner?.DivisionId is Guid ownerDivisionId && divisionIds.Contains(ownerDivisionId)) ||
+                    (k.DivisionOwnerId.HasValue && divisionIds.Contains(k.DivisionOwnerId.Value)))
                 : filtered.Where(_ => false);
         }
 

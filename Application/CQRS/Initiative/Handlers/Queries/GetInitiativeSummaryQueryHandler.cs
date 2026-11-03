@@ -2,6 +2,7 @@ using Application.CQRS.Initiative.Requests.Queries;
 using Application.DTOS.Initiative;
 using Application.Exceptions;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Domain.Calculation;
 using MediatR;
 
@@ -17,25 +18,29 @@ public class GetInitiativeHistoryQueryHandler
     private readonly IInitiativeRepository initiativeRepository;
     private readonly IInitiativeUpdateLogRepository updateLogRepository;
     private readonly InitiativeDtoFactory dtoFactory;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     public GetInitiativeHistoryQueryHandler(
         IInitiativeRepository _initiativeRepository,
         IInitiativeUpdateLogRepository _updateLogRepository,
-        InitiativeDtoFactory _dtoFactory)
+        InitiativeDtoFactory _dtoFactory,
+        IOrganizationalScopeService _organizationalScope)
     {
         initiativeRepository = _initiativeRepository;
         updateLogRepository = _updateLogRepository;
         dtoFactory = _dtoFactory;
+        organizationalScope = _organizationalScope;
     }
 
     public async Task<List<InitiativeUpdateLogDto>> Handle(
         GetInitiativeHistoryQueryRequest request,
         CancellationToken cancellationToken)
     {
-        if (await initiativeRepository.GetById(request.InitiativeId) == null)
-        {
-            throw new NotFoundException("Initiative", request.InitiativeId);
-        }
+        var initiative = await initiativeRepository.GetById(request.InitiativeId)
+            ?? throw new NotFoundException("Initiative", request.InitiativeId);
+
+        await organizationalScope.EnsureInitiativeAsync(
+            initiative.OwnerId, initiative.DivisionOwnerId, cancellationToken);
 
         var logs = await updateLogRepository.GetForInitiativeAsync(request.InitiativeId, request.MilestoneId);
         var milestones = await initiativeRepository.GetDetailAsync(request.InitiativeId);
@@ -66,22 +71,42 @@ public class GetInitiativeSummaryQueryHandler : IRequestHandler<GetInitiativeSum
     private readonly IInitiativeRepository initiativeRepository;
     private readonly IInitiativeProgressCalculator progressCalculator;
     private readonly IInitiativeBudgetCalculator budgetCalculator;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     public GetInitiativeSummaryQueryHandler(
         IInitiativeRepository _initiativeRepository,
         IInitiativeProgressCalculator _progressCalculator,
-        IInitiativeBudgetCalculator _budgetCalculator)
+        IInitiativeBudgetCalculator _budgetCalculator,
+        IOrganizationalScopeService _organizationalScope)
     {
         initiativeRepository = _initiativeRepository;
         progressCalculator = _progressCalculator;
         budgetCalculator = _budgetCalculator;
+        organizationalScope = _organizationalScope;
     }
 
     public async Task<InitiativeSummaryDto> Handle(GetInitiativeSummaryQuery request, CancellationToken cancellationToken)
     {
-        var initiatives = request.OwnerId.HasValue
-            ? await initiativeRepository.GetByOwnerIdWithMilestonesAsync(request.OwnerId.Value)
-            : await initiativeRepository.GetAllWithMilestonesAsync();
+        var scopeDivisionIds = organizationalScope.DivisionIds;
+        IReadOnlyList<Domain.Entities.Initiative> initiatives;
+
+        if (scopeDivisionIds.Count > 0)
+        {
+            // Division accounts always aggregate only their own initiatives and their
+            // authorized divisions' initiatives, even when they hold a broader group-granted right.
+            initiatives = await initiativeRepository.GetByOwnerIdWithMilestonesAsync(
+                organizationalScope.UserId ?? Guid.Empty, scopeDivisionIds);
+        }
+        else if (await organizationalScope.CanAccessInitiativePortfolioAsync(cancellationToken))
+        {
+            initiatives = request.OwnerId.HasValue
+                ? await initiativeRepository.GetByOwnerIdWithMilestonesAsync(request.OwnerId.Value)
+                : await initiativeRepository.GetAllWithMilestonesAsync();
+        }
+        else
+        {
+            throw new ForbiddenException("You do not have access to the initiative portfolio.");
+        }
 
         var ids = initiatives.Select(i => i.Id).ToList();
         var inputs = await initiativeRepository.GetProgressInputsAsync(ids, cancellationToken);

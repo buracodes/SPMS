@@ -11,6 +11,12 @@ namespace Application.Services;
 
 public sealed partial class RoleDashboardService
 {
+    /// <summary>Too many lines turn the trend into noise, so only the most material KPIs are drawn.</summary>
+    private const int MaxKpiTrendSeries = 5;
+
+    private static readonly string[] KpiTrendPalette =
+        { "primary", "accent", "blue", "Green", "Red" };
+
     // ------------------------------------------------------------------ shared helpers
 
     private static KpiScorePeriod? KpiPeriod(DashboardLoad load, Guid kpiId)
@@ -89,6 +95,26 @@ public sealed partial class RoleDashboardService
         return load.Goals.FirstOrDefault(g => g.Id == goalId.Value)?.Name ?? "-";
     }
 
+    /// <summary>
+    /// Goals are reached through KRA for a corporate KPI and directly through DivisionGoalId
+    /// for a division KPI, so one helper keeps every table's goal column correct in both scopes.
+    /// </summary>
+    private static string KpiGoalName(DashboardLoad load, Kpi kpi)
+    {
+        if (!load.IsDivisionScoped)
+        {
+            return GoalName(load, kpi.Kra?.GoalId);
+        }
+
+        return kpi.DivisionGoal?.Name
+               ?? load.DivisionGoals.FirstOrDefault(g => g.Id == kpi.DivisionGoalId)?.Name
+               ?? "-";
+    }
+
+    /// <summary>Division plans have no KRA layer, so the KRA column stays empty there.</summary>
+    private static string KpiKraName(DashboardLoad load, Kpi kpi)
+        => load.IsDivisionScoped ? "-" : kpi.Kra?.Name ?? "-";
+
     /// <summary>FRD lifecycle labels. Archived was retired; an initiative nobody is working on is On hold.</summary>
     private static string InitiativeStatusText(InitiativeStatus status) => status switch
     {
@@ -158,7 +184,10 @@ public sealed partial class RoleDashboardService
     {
         var score = OverallScore(load);
         var rag = load.Rag(score);
-        var goalsWithScore = load.Goals.Count(g => GoalScore(load, g.Id).HasValue);
+        var scoredGoalIds = load.IsDivisionScoped
+            ? load.DivisionGoals.Select(g => g.Id).ToList()
+            : load.Goals.Select(g => g.Id).ToList();
+        var goalsWithScore = scoredGoalIds.Count(id => GoalScore(load, id).HasValue);
         var kpisWithData = load.Kpis.Count(k => KpiPeriod(load, k.Id)?.PeriodScore.HasValue == true);
         var currentMonth = load.CurrentFiscalMonth;
 
@@ -197,9 +226,9 @@ public sealed partial class RoleDashboardService
             {
                 Key = "goals",
                 Label = "Goals on track",
-                Value = load.Goals.Count(g => load.Rag(GoalScore(load, g.Id)) == DashboardRag.Green)
+                Value = scoredGoalIds.Count(id => load.Rag(GoalScore(load, id)) == DashboardRag.Green)
                     .ToString(CultureInfo.InvariantCulture),
-                Detail = $"{goalsWithScore} of {load.Goals.Count} scored"
+                Detail = $"{goalsWithScore} of {scoredGoalIds.Count} scored"
             });
 
             cards.Add(new StatCardDto
@@ -241,18 +270,23 @@ public sealed partial class RoleDashboardService
         cards.Add(new StatCardDto
         {
             Key = "scorecards",
-            Label = "Scorecards",
+            Label = load.IsDivisionScoped ? "Division scorecard" : "Scorecards",
             Value = load.Scorecards.Count.ToString(CultureInfo.InvariantCulture),
             Detail = $"{load.Scorecards.Count(s => s.ScorecardStatus == ScorecardStatus.Active)} active",
-            Route = "/scorecards"
+            Route = load.Granted(Permissions.ScorecardView)
+                ? "/scorecards"
+                : load.IsDivisionScoped ? "/division-planning" : null
         });
 
         return new StatCardWidgetDto
         {
             Title = "Performance summary",
-            Description = load.Profile.DataScope == DashboardDataScope.AssignedOnly
-                ? "Your assigned KPIs for the selected fiscal year, scorecard and period."
-                : "Headline numbers for the selected fiscal year, scorecard and period.",
+            Description = load.Profile.DataScope switch
+            {
+                DashboardDataScope.AssignedOnly => "Your assigned KPIs for the selected fiscal year, scorecard and period.",
+                DashboardDataScope.Division => "Headline numbers for your division, selected fiscal year and period.",
+                _ => "Headline numbers for the selected fiscal year, scorecard and period."
+            },
             Cards = cards
         };
     }
@@ -405,6 +439,67 @@ public sealed partial class RoleDashboardService
         };
     }
 
+    /// <summary>
+    /// Month by month score for the highest-weight KPIs in scope. Weights decide which lines
+    /// are material, so the same KPIs stay on the chart when the period filter changes.
+    /// </summary>
+    private TrendWidgetDto BuildKpiPerformanceTrend(DashboardLoad load)
+    {
+        var year = load.SelectedYearResult;
+        var months = load.Periods
+            .Where(p => load.CurrentFiscalMonth <= 0 || p.FiscalMonth <= load.CurrentFiscalMonth)
+            .OrderBy(p => p.FiscalMonth)
+            .ToList();
+
+        var tracked = load.Kpis
+            .Where(k => year is not null && year.Kpis.ContainsKey(k.Id))
+            .OrderByDescending(k => k.Weight)
+            .ThenBy(k => k.Name, StringComparer.Ordinal)
+            .Take(MaxKpiTrendSeries)
+            .ToList();
+
+        var empty = new TrendWidgetDto
+        {
+            Title = "KPI performance trend",
+            Description = "Month by month score for the most material KPIs in scope.",
+            EmptyMessage = "No KPI score history is available for the selected period."
+        };
+
+        if (year is null || tracked.Count == 0 || months.Count == 0)
+        {
+            return empty;
+        }
+
+        var series = tracked
+            .Select((kpi, index) =>
+            {
+                var period = year.Kpis[kpi.Id];
+
+                return new WidgetSeriesDto
+                {
+                    Name = kpi.Name,
+                    Kind = "line",
+                    Color = KpiTrendPalette[index % KpiTrendPalette.Length],
+                    Values = months
+                        .Select(m => period.MonthlyScores.TryGetValue(m.FiscalMonth, out var score) ? score : null)
+                        .ToList()
+                };
+            })
+            .ToList();
+
+        return new TrendWidgetDto
+        {
+            Title = "KPI performance trend",
+            Description = tracked.Count == 1
+                ? "Month by month score for the most material KPI in scope."
+                : $"Month by month score for the {tracked.Count} highest weighted KPIs in scope.",
+            Categories = months.Select(MonthLabel).ToList(),
+            Series = series,
+            ValueSuffix = "%",
+            EmptyMessage = empty.EmptyMessage
+        };
+    }
+
     private TrendWidgetDto BuildMilestoneTrend(DashboardLoad load)
     {
         var months = load.Periods
@@ -464,7 +559,9 @@ public sealed partial class RoleDashboardService
         return new TrendWidgetDto
         {
             Title = "Milestone completion",
-            Description = "Planned progress against delivered progress across active initiatives.",
+            Description = load.IsDivisionScoped
+                ? "Planned progress against delivered progress for your division's active initiatives."
+                : "Planned progress against delivered progress across active initiatives.",
             Categories = months.Select(MonthLabel).ToList(),
             Series = new[]
             {
@@ -482,7 +579,16 @@ public sealed partial class RoleDashboardService
     {
         var rows = new List<TableRowDto>();
 
-        foreach (var scorecard in load.Scorecards.Take(MaxScorecardsForComparison))
+        // A division caller only ever has its own plan's period result loaded, so showing the
+        // other plan scorecards would print zero scores for them. Restrict the table to the
+        // division's selected scorecard instead.
+        var scorecards = load.IsDivisionScoped
+            ? load.Scorecards.Where(s => s.Id == load.SelectedScorecard?.Id).ToList()
+            : load.Scorecards.Take(MaxScorecardsForComparison).ToList();
+
+        var divisionId = load.SelectedDivisionId;
+
+        foreach (var scorecard in scorecards)
         {
             var result = load.PeriodResults.TryGetValue(scorecard.Id, out var r) ? r : null;
             var entity = result is not null && result.Scorecards.TryGetValue(scorecard.Id, out var e) ? e : null;
@@ -493,9 +599,16 @@ public sealed partial class RoleDashboardService
                 .Select(g => g.PeriodScore!.Value)
                 .ToList() ?? new List<decimal>();
 
+            var route = "/scorecards/" + scorecard.Id;
+            if (load.IsDivisionScoped)
+            {
+                route = "/division-planning/" + scorecard.Id
+                        + (divisionId is null ? string.Empty : "?divisionId=" + divisionId.Value);
+            }
+
             rows.Add(Row(
                 scorecard.Id.ToString(),
-                $"/scorecards/{scorecard.Id}",
+                route,
                 ("scorecard", scorecard.Name),
                 ("scope", scorecard.Scope.ToString()),
                 ("status", scorecard.ScorecardStatus == ScorecardStatus.Active ? "Active" : "Closed"),
@@ -509,8 +622,10 @@ public sealed partial class RoleDashboardService
 
         return new TableWidgetDto
         {
-            Title = "Scorecard performance",
-            Description = "Every scorecard the selected fiscal year contains, with score and RAG.",
+            Title = load.IsDivisionScoped ? "Division scorecard performance" : "Scorecard performance",
+            Description = load.IsDivisionScoped
+                ? "Your division's scorecard with its plan goals, score and RAG."
+                : "Every scorecard the selected fiscal year contains, with score and RAG.",
             Columns = new[]
             {
                 Col("scorecard", "Scorecard"),
@@ -523,7 +638,9 @@ public sealed partial class RoleDashboardService
                 Col("trend", "Trend", "number", "right")
             },
             Rows = rows,
-            EmptyMessage = "No scorecards are available for this fiscal year.",
+            EmptyMessage = load.IsDivisionScoped
+                ? "No scorecard is linked to your division plan for this fiscal year."
+                : "No scorecards are available for this fiscal year.",
             ShowRowLinks = true
         };
     }
@@ -533,7 +650,9 @@ public sealed partial class RoleDashboardService
         var rows = new List<TableRowDto>();
         var initiatives = load.Initiatives.Count > 0
             ? load.Initiatives
-            : await initiativeRepository.GetAllWithMilestonesAsync();
+            : load.IsDivisionScoped
+                ? Array.Empty<Initiative>()
+                : await initiativeRepository.GetAllWithMilestonesAsync();
 
         foreach (var scorecard in load.Scorecards.Take(MaxScorecardsForComparison))
         {
@@ -542,8 +661,17 @@ public sealed partial class RoleDashboardService
                 ? entity.PeriodScore
                 : null;
 
-            var goals = await goalRepository.GetByScorecardAsync(scorecard.Id);
-            var kpis = await kpiRepository.GetByScorecardAsync(scorecard.Id);
+            // A division scoped caller's health is measured on their own plan, never on the
+            // corporate hierarchy the plan scorecard may be shared with.
+            var scopedToSelectedScorecard = load.IsDivisionScoped && load.SelectedScorecard?.Id == scorecard.Id;
+            var goals = load.IsDivisionScoped
+                ? (IReadOnlyList<Goal>)load.Goals
+                : await goalRepository.GetByScorecardAsync(scorecard.Id);
+            var kpis = scopedToSelectedScorecard
+                ? load.Kpis
+                : load.IsDivisionScoped
+                    ? (IReadOnlyList<Kpi>)Array.Empty<Kpi>()
+                    : await kpiRepository.GetByScorecardAsync(scorecard.Id);
             var targets = await kpiTargetRepository.GetForScorecardFiscalYearAsync(scorecard.Id, load.FiscalYear!.Id);
             var targetKpiIds = targets.Select(t => t.KpiId).ToHashSet();
             var missingTargets = kpis.Count(k => !targetKpiIds.Contains(k.Id));
@@ -676,6 +804,128 @@ public sealed partial class RoleDashboardService
         };
     }
 
+    /// <summary>
+    /// Division goal rollup for a division scoped caller. Corporate goals are never loaded for
+    /// this branch, so the table reads the plan's own goals and routes back to the division
+    /// planning page rather than to a corporate goal drill-down.
+    /// </summary>
+    private TableWidgetDto BuildDivisionGoalTable(DashboardLoad load)
+    {
+        var scorecardId = load.SelectedScorecard?.Id;
+        var divisionId = load.SelectedDivisionId;
+        var route = scorecardId is null || divisionId is null
+            ? null
+            : $"/division-planning/{scorecardId}?divisionId={divisionId}";
+
+        var rows = load.DivisionGoals
+            .Select(goal =>
+            {
+                var score = GoalScore(load, goal.Id);
+                var trend = load.SelectedPeriodResult is not null
+                    && load.SelectedPeriodResult.Goals.TryGetValue(goal.Id, out var entity)
+                        ? TrendOf(entity.MonthlyScores)
+                        : null;
+
+                var goalKpis = load.Kpis.Where(k => k.DivisionGoalId == goal.Id).ToList();
+                var withData = goalKpis.Count(k => KpiPeriod(load, k.Id)?.PeriodScore.HasValue == true);
+
+                return new
+                {
+                    Goal = goal,
+                    Score = score,
+                    Trend = trend,
+                    KpiCount = goalKpis.Count,
+                    KpiWithData = withData
+                };
+            })
+            .OrderByDescending(x => x.Score ?? decimal.MinValue)
+            .ThenBy(x => x.Goal.Name, StringComparer.Ordinal)
+            .Select(x => Row(
+                x.Goal.Id.ToString(),
+                route,
+                ("goal", x.Goal.Name),
+                ("weight", x.Goal.Weight.ToString("0.##", CultureInfo.InvariantCulture)),
+                ("kpis", x.KpiCount),
+                ("kpisWithData", x.KpiWithData),
+                ("score", Percent(x.Score)),
+                ("rag", load.Rag(x.Score)),
+                ("trend", Signed(x.Trend))))
+            .ToList();
+
+        return new TableWidgetDto
+        {
+            Title = "Goal performance",
+            Description = "Your division's goals with score, RAG and movement for the selected period.",
+            Columns = new[]
+            {
+                Col("goal", "Goal"),
+                Col("weight", "Weight %", "number", "right"),
+                Col("kpis", "KPIs", "number", "right"),
+                Col("kpisWithData", "With data", "number", "right"),
+                Col("score", "Score", "percent", "right"),
+                Col("rag", "RAG", "rag"),
+                Col("trend", "Trend", "number", "right")
+            },
+            Rows = rows,
+            EmptyMessage = "No goals are configured for your division plan.",
+            ShowRowLinks = route is not null
+        };
+    }
+
+    /// <summary>
+    /// Division Goal -> KPI drill-down. Division plans have no KRA layer, so the goal's direct
+    /// KPIs are returned alongside the goal rollup and the corporate KRA list stays empty.
+    /// </summary>
+    private GoalDrilldownDto BuildDivisionGoalDrilldown(DashboardLoad load, DivisionGoal goal)
+    {
+        var score = GoalScore(load, goal.Id);
+        var trend = load.SelectedPeriodResult is not null
+            && load.SelectedPeriodResult.Goals.TryGetValue(goal.Id, out var entity)
+                ? TrendOf(entity.MonthlyScores)
+                : null;
+
+        var kpis = load.Kpis
+            .Where(k => k.DivisionGoalId == goal.Id)
+            .Select(kpi => BuildKpiDto(load, kpi))
+            .OrderBy(k => k.Name)
+            .ToList();
+
+        return new GoalDrilldownDto
+        {
+            GoalId = goal.Id,
+            GoalName = goal.Name,
+            Weight = goal.Weight,
+            Score = score,
+            RagLabel = load.Rag(score),
+            Trend = trend,
+            IsDivisionGoal = true,
+            Kras = Array.Empty<GoalKraDto>(),
+            Kpis = kpis
+        };
+    }
+
+    private GoalKraKpiDto BuildKpiDto(DashboardLoad load, Kpi kpi)
+    {
+        var period = KpiPeriod(load, kpi.Id);
+        var month = period?.MonthlyActuals.Keys.DefaultIfEmpty(0).Max() ?? 0;
+
+        return new GoalKraKpiDto
+        {
+            KpiId = kpi.Id,
+            Name = kpi.Name,
+            Unit = kpi.Unit ?? string.Empty,
+            OptimizationType = OptimisationText(kpi.OptimizationType),
+            Weight = kpi.Weight,
+            Target = period?.PeriodTarget,
+            Actual = period?.PeriodActual,
+            Score = period?.PeriodScore,
+            RagLabel = load.Rag(period?.PeriodScore),
+            KpiType = (int)kpi.KpiType,
+            HasData = period?.PeriodActual.HasValue == true,
+            Note = month > 0 ? NoteFor(load, kpi.Id, month) : null
+        };
+    }
+
     private GoalDrilldownDto BuildGoalDrilldown(DashboardLoad load, Goal goal)
     {
         var score = GoalScore(load, goal.Id);
@@ -701,27 +951,7 @@ public sealed partial class RoleDashboardService
                     : null;
 
             var kpiDtos = group
-                .Select(kpi =>
-                {
-                    var period = KpiPeriod(load, kpi.Id);
-                    var month = period?.MonthlyActuals.Keys.DefaultIfEmpty(0).Max() ?? 0;
-
-                    return new GoalKraKpiDto
-                    {
-                        KpiId = kpi.Id,
-                        Name = kpi.Name,
-                        Unit = kpi.Unit ?? string.Empty,
-                        OptimizationType = OptimisationText(kpi.OptimizationType),
-                        Weight = kpi.Weight,
-                        Target = period?.PeriodTarget,
-                        Actual = period?.PeriodActual,
-                        Score = period?.PeriodScore,
-                        RagLabel = load.Rag(period?.PeriodScore),
-                        KpiType = (int)kpi.KpiType,
-                        HasData = period?.PeriodActual.HasValue == true,
-                        Note = month > 0 ? NoteFor(load, kpi.Id, month) : null
-                    };
-                })
+                .Select(kpi => BuildKpiDto(load, kpi))
                 .OrderBy(k => k.Name)
                 .ToList();
 
@@ -919,9 +1149,12 @@ public sealed partial class RoleDashboardService
         return new TableWidgetDto
         {
             Title = "Initiative status",
-            Description = load.Profile.DataScope == DashboardDataScope.AssignedOnly
-                ? "Initiatives you own."
-                : "Not started, in progress, completed and on hold initiatives.",
+            Description = load.Profile.DataScope switch
+            {
+                DashboardDataScope.AssignedOnly => "Initiatives you own.",
+                DashboardDataScope.Division => "Initiatives owned by your division or by you.",
+                _ => "Not started, in progress, completed and on hold initiatives."
+            },
             Columns = new[]
             {
                 Col("initiative", "Initiative"),
@@ -935,16 +1168,21 @@ public sealed partial class RoleDashboardService
                 Col("budget", "Budget", "money", "right")
             },
             Rows = rows,
-            EmptyMessage = load.Profile.DataScope == DashboardDataScope.AssignedOnly
-                ? "No initiatives are assigned to you."
-                : "No initiatives have been created yet.",
+            EmptyMessage = load.Profile.DataScope switch
+            {
+                DashboardDataScope.AssignedOnly => "No initiatives are assigned to you.",
+                DashboardDataScope.Division => "No initiatives belong to your division.",
+                _ => "No initiatives have been created yet."
+            },
             ShowRowLinks = true
         };
     }
 
     private async Task<TableWidgetDto> BuildInitiativeStatusAsync(DashboardLoad load, CancellationToken cancellationToken)
     {
-        if (load.Initiatives.Count == 0 && load.Profile.DataScope != DashboardDataScope.AssignedOnly)
+        if (load.Initiatives.Count == 0
+            && load.Profile.DataScope != DashboardDataScope.AssignedOnly
+            && !load.IsDivisionScoped)
         {
             load.Initiatives = await initiativeRepository.GetAllWithMilestonesAsync();
         }
@@ -1034,6 +1272,12 @@ public sealed partial class RoleDashboardService
         var selectedFiscalYearId = fiscalYearId.Value;
 
         var plans = await divisionPlanRepository.GetByScorecardAsync(selectedScorecardId);
+        if (load.IsDivisionScoped)
+        {
+            // A division scoped caller only ever compares their authorized divisions, never siblings.
+            var divisionIds = currentUserService.DivisionIds;
+            plans = plans.Where(p => divisionIds.Contains(p.DivisionId)).ToList();
+        }
         var scope = load.SelectedPeriodResult?.Scope;
         var entries = new List<DivisionScoreEntry>();
 
@@ -1107,14 +1351,37 @@ public sealed partial class RoleDashboardService
 
     // ------------------------------------------------------------------ data entry
 
+    /// <summary>
+    /// Task list for actual entry. It shows every KPI the caller may work with and marks the
+    /// entry state, but the entry route is only attached when the caller holds a write right
+    /// and the period is open. Division membership or KPI ownership alone never enables entry;
+    /// the API handler enforces the same rule on submit.
+    /// </summary>
     private TableWidgetDto BuildAssignedKpis(DashboardLoad load)
     {
         var scope = load.SelectedPeriodResult?.Scope;
         var lastMonth = scope?.ToMonth ?? load.CurrentFiscalMonth;
-        var lockState = lastMonth > 0 && load.LocksByMonth.TryGetValue(lastMonth, out var l) ? l.State : PeriodLockState.Locked;
+        var lockInfo = lastMonth > 0 && load.LocksByMonth.TryGetValue(lastMonth, out var l) ? l : null;
+        var lockState = lockInfo?.State ?? PeriodLockState.NotYetOpen;
+        var periodOpen = lockState == PeriodLockState.Open;
+
+        var canEnter = load.Granted(Permissions.ActualsEnter)
+                       || (load.IsDivisionScoped && load.Granted(Permissions.DivisionActualsEnter));
+
+        var scorecardId = load.SelectedScorecard?.Id;
+        var divisionId = load.SelectedDivisionId;
+        var divisionRoute = scorecardId is null
+            ? "/division-planning"
+            : $"/division-planning/{scorecardId}?divisionId={divisionId}";
+
+        var entryRoute = load.Granted(Permissions.ActualsEnter)
+            ? "/data-entry"
+            : divisionRoute;
+
+        var routesAvailable = canEnter && periodOpen;
+
         var rows = load.Kpis
-            .OrderBy(k => k.Kra?.GoalId.ToString(), StringComparer.Ordinal)
-            .ThenBy(k => k.Kra?.Name, StringComparer.Ordinal)
+            .OrderBy(k => KpiGoalName(load, k), StringComparer.Ordinal)
             .ThenBy(k => k.Name, StringComparer.Ordinal)
             .Select(kpi =>
             {
@@ -1122,35 +1389,46 @@ public sealed partial class RoleDashboardService
                 var hasData = period?.PeriodActual.HasValue == true;
                 var note = lastMonth > 0 ? NoteFor(load, kpi.Id, lastMonth) : null;
 
-                var entryStatus = lockState == PeriodLockState.Locked
-                    ? "Locked"
-                    : hasData
-                        ? "Entered"
-                        : "Missing";
+                var entryStatus = lockState switch
+                {
+                    PeriodLockState.Locked => "Locked",
+                    PeriodLockState.Open => hasData ? "Entered" : "Pending",
+                    _ => "Not open"
+                };
+
+                var action = lockState switch
+                {
+                    PeriodLockState.Locked => "Read only",
+                    PeriodLockState.Open => canEnter ? "Enter actual" : "Read only",
+                    _ => "Not yet open"
+                };
 
                 return Row(
                     kpi.Id.ToString(),
-                    "/kpis",
+                    routesAvailable ? entryRoute : null,
                     ("kpi", kpi.Name),
-                    ("goal", GoalName(load, kpi.Kra?.GoalId)),
-                    ("kra", kpi.Kra?.Name ?? "-"),
+                    ("goal", KpiGoalName(load, kpi)),
+                    ("kra", KpiKraName(load, kpi)),
                     ("unit", kpi.Unit),
-                    ("optimization", OptimisationText(kpi.OptimizationType)),
                     ("target", period?.PeriodTarget),
                     ("actual", period?.PeriodActual),
                     ("score", Percent(period?.PeriodScore)),
                     ("rag", load.Rag(period?.PeriodScore)),
                     ("entryStatus", entryStatus),
                     ("periodState", LockStateText(lockState)),
-                    ("note", note ?? "-")
+                    ("deadline", periodOpen ? Date(lockInfo?.EffectiveCutoffDate) : "-"),
+                    ("note", note ?? "-"),
+                    ("action", action)
                 );
             })
             .ToList();
 
         return new TableWidgetDto
         {
-            Title = "My KPIs",
-            Description = "Actual against target for the KPIs assigned to you, with data entry status and evidence.",
+            Title = load.IsDivisionScoped ? "Division KPI entry tasks" : "My KPI entry tasks",
+            Description = periodOpen
+                ? "Actual against target for the KPIs in scope. Open a row to enter the current period before the cutoff."
+                : "Actual against target for the KPIs in scope. The selected period is not open for entry.",
             Columns = new[]
             {
                 Col("kpi", "KPI"),
@@ -1161,12 +1439,17 @@ public sealed partial class RoleDashboardService
                 Col("actual", "Actual", "number", "right"),
                 Col("score", "Score", "percent", "right"),
                 Col("rag", "RAG", "rag"),
-                Col("entryStatus", "Entry status"),
+                Col("entryStatus", "Status"),
                 Col("periodState", "Period"),
-                Col("note", "Comment / evidence")
+                Col("deadline", "Deadline", "date"),
+                Col("note", "Comment / evidence"),
+                Col("action", "Action")
             },
             Rows = rows,
-            EmptyMessage = "No KPIs are assigned to you for this scorecard."
+            EmptyMessage = load.IsDivisionScoped
+                ? "No KPIs are configured in your division plan for this scorecard."
+                : "No KPIs are assigned to you for this scorecard.",
+            ShowRowLinks = routesAvailable
         };
     }
 
@@ -1265,7 +1548,7 @@ public sealed partial class RoleDashboardService
             Columns = new[]
             {
                 Col("month", "Month"),
-                Col("state", "Period state"),
+                Col("lockState", "Period state"),
                 Col("assigned", "KPIs in scope", "number", "right"),
                 Col("entered", "Entered", "number", "right"),
                 Col("missing", "Missing", "number", "right"),
@@ -1429,9 +1712,39 @@ public sealed partial class RoleDashboardService
 
     // ------------------------------------------------------------------ alerts
 
+    /// <summary>
+    /// Where a caller can go for missing actuals. Only an entry right lands on the entry page;
+    /// a read-only division caller is sent to the read-only plan instead of a guarded route.
+    /// </summary>
+    private string? DataAlertRoute(DashboardLoad load)
+    {
+        if (load.Granted(Permissions.ActualsEnter))
+        {
+            return "/data-entry";
+        }
+
+        if (!load.IsDivisionScoped)
+        {
+            return null;
+        }
+
+        var scorecardId = load.SelectedScorecard?.Id;
+        var divisionId = load.SelectedDivisionId;
+
+        return scorecardId is null
+            ? "/division-planning"
+            : $"/division-planning/{scorecardId}?divisionId={divisionId}";
+    }
+
+    /// <summary>KPI detail route, falling back to the read-only division plan for a division viewer.</summary>
+    private string? KpiAlertRoute(DashboardLoad load)
+        => load.Granted(Permissions.KpiView) ? "/kpis" : load.IsDivisionScoped ? DataAlertRoute(load) : null;
+
     private async Task<AlertListWidgetDto> BuildAlertsAsync(DashboardLoad load, CancellationToken cancellationToken)
     {
         var alerts = new List<AlertDto>();
+        var dataAlertRoute = DataAlertRoute(load);
+        var kpiAlertRoute = KpiAlertRoute(load);
 
         // Red KPIs for more than two consecutive months.
         var year = load.SelectedYearResult;
@@ -1471,7 +1784,7 @@ public sealed partial class RoleDashboardService
                         Severity = "danger",
                         Title = $"{kpi.Name} off track for {streak} consecutive months",
                         Description = $"Monthly score stayed below {load.Thresholds.Yellow:F0}% for {streak} months in a row.",
-                        Route = "/kpis"
+                        Route = kpiAlertRoute
                     });
                 }
             }
@@ -1548,7 +1861,7 @@ public sealed partial class RoleDashboardService
                     Severity = "warning",
                     Title = $"{missing.Count} KPI{(missing.Count == 1 ? string.Empty : "s")} without actuals for {MonthLabel(load.FiscalYear, currentMonth)}",
                     Description = $"No actual value has been recorded for {scope} in the current period.",
-                    Route = "/data-entry"
+                    Route = dataAlertRoute
                 });
             }
         }
@@ -1562,7 +1875,7 @@ public sealed partial class RoleDashboardService
                 Severity = "danger",
                 Title = $"Data entry overdue for {MonthLabel(period)}",
                 Description = $"{missingCount} KPI{(missingCount == 1 ? string.Empty : "s")} still missing after the cutoff date.",
-                Route = "/data-entry"
+                Route = dataAlertRoute
             });
         }
 

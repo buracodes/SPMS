@@ -1,5 +1,6 @@
 using Application.Dashboard;
 using Application.DTOS.Dashboard;
+using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
@@ -34,6 +35,7 @@ public class DashboardController : ControllerBase
     private readonly IFiscalPeriodRepository fiscalPeriodRepository;
     private readonly IFiscalYearRepository fiscalYearRepository;
     private readonly IRoleDashboardService roleDashboardService;
+    private readonly IOrganizationalScopeService organizationalScope;
 
     public DashboardController(
         IScorecardRepository _scorecardRepository,
@@ -50,7 +52,8 @@ public class DashboardController : ControllerBase
         IPeriodLockConfigRepository _periodLockConfigRepository,
         IFiscalPeriodRepository _fiscalPeriodRepository,
         IFiscalYearRepository _fiscalYearRepository,
-        IRoleDashboardService _roleDashboardService)
+        IRoleDashboardService _roleDashboardService,
+        IOrganizationalScopeService _organizationalScope)
     {
         scorecardRepository = _scorecardRepository;
         goalRepository = _goalRepository;
@@ -67,12 +70,28 @@ public class DashboardController : ControllerBase
         fiscalPeriodRepository = _fiscalPeriodRepository;
         fiscalYearRepository = _fiscalYearRepository;
         roleDashboardService = _roleDashboardService;
+        organizationalScope = _organizationalScope;
+    }
+
+    /// <summary>
+    /// The legacy summary/overview/activity/pending-action payloads aggregate every scorecard and
+    /// every division in one response. A division scoped employee must not receive them; the
+    /// division scoped role dashboard (/context and /widgets) is the supported view.
+    /// </summary>
+    private void EnsureOrganizationWide()
+    {
+        if (organizationalScope.DivisionIds.Count > 0)
+        {
+            throw new ForbiddenException(
+                "This organization-wide dashboard view is not available for your division scope.");
+        }
     }
 
     [HttpGet("summary")]
     [Authorize(Policy = Permissions.DashboardView)]
     public async Task<ActionResult<Response<DashboardSummaryDto>>> GetSummary()
     {
+        EnsureOrganizationWide();
         var scorecards = await scorecardRepository.GetAll();
         var goals = await goalRepository.GetAll();
         var kras = await kraRepository.GetAll();
@@ -102,6 +121,7 @@ public class DashboardController : ControllerBase
     [Authorize(Policy = Permissions.DashboardView)]
     public async Task<ActionResult<Response<DashboardOverviewDto>>> GetOverview()
     {
+        EnsureOrganizationWide();
         var role = ResolvePrimaryRole();
 
         var scorecards = await scorecardRepository.GetAll();
@@ -223,6 +243,7 @@ public class DashboardController : ControllerBase
     [Authorize(Policy = Permissions.DashboardView)]
     public async Task<ActionResult<Response<List<DashboardActivityDto>>>> GetActivity()
     {
+        EnsureOrganizationWide();
         var entries = await auditLogRepository.GetRecentAsync(8);
         var latest = entries
             .Select(e => new DashboardActivityDto
@@ -247,6 +268,7 @@ public class DashboardController : ControllerBase
     [Authorize(Policy = Permissions.DashboardView)]
     public async Task<ActionResult<Response<List<DashboardPendingActionDto>>>> GetPendingActions()
     {
+        EnsureOrganizationWide();
         var actions = new List<DashboardPendingActionDto>();
 
         var kpis = await kpiRepository.GetAll();

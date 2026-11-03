@@ -148,6 +148,7 @@ public class LockAuthorizationBehaviorTests
         var fixture = await CreateFixtureWithLockAsync(lease);
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
+            UserId = Guid.NewGuid(),
             Permissions = new[] { Permissions.ActualsOverride }
         });
 
@@ -175,6 +176,7 @@ public class LockAuthorizationBehaviorTests
         var fixture = await CreateFixtureWithLockAsync(lease);
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
+            UserId = Guid.NewGuid(),
             Permissions = new[] { Permissions.ActualsOverride }
         });
 
@@ -210,6 +212,7 @@ public class LockAuthorizationBehaviorTests
         var fixture = await CreateClosedScorecardFixtureAsync(lease);
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
+            UserId = Guid.NewGuid(),
             Permissions = new[] { Permissions.ActualsOverride }
         });
 
@@ -229,6 +232,7 @@ public class LockAuthorizationBehaviorTests
         var fixture = await CreateClosedScorecardFixtureAsync(lease);
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
+            UserId = Guid.NewGuid(),
             Permissions = new[] { Permissions.ActualsOverride }
         });
 
@@ -344,6 +348,7 @@ public class LockAuthorizationBehaviorTests
         var clock = TestBusinessClock.On(new DateTime(2026, 7, 8, 8, 0, 0, DateTimeKind.Utc));
         var behavior = CreateBehavior(lease, new TestCurrentUserService
         {
+            UserId = Guid.NewGuid(),
             Permissions = new[] { Permissions.ActualsOverride }
         }, clock);
 
@@ -362,6 +367,39 @@ public class LockAuthorizationBehaviorTests
         await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<ActualValueDto>()); }, CancellationToken.None);
 
         Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Blocks_StaleOverrideClaim_AfterTheLiveGrantIsRevoked()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureWithLockAsync(lease);
+        var userId = Guid.NewGuid();
+
+        // The token still carries actuals:override, but the live grant table no longer does.
+        var live = new TestEffectivePermissionService();
+        live.Grant(userId, Permissions.ActualsOverride);
+        live.Revoke(userId, Permissions.ActualsOverride);
+
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            UserId = userId,
+            Permissions = new[] { Permissions.ActualsOverride }
+        }, livePermissions: live);
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 100,
+                OverrideReason = "Stale claim must not authorize this write."
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
     }
 
     private static async Task<(Guid KpiId, Guid ScorecardId, Guid PeriodId)> CreateClosedScorecardFixtureAsync(TestDbContextLease lease)
@@ -384,10 +422,25 @@ public class LockAuthorizationBehaviorTests
             NullLogger<PeriodLockStatusService>.Instance);
     }
 
+    private static IEffectivePermissionService CreateLivePermissions(ICurrentUserService currentUserService)
+    {
+        var live = new TestEffectivePermissionService();
+        if (currentUserService.UserId is Guid userId)
+        {
+            foreach (var permission in currentUserService.Permissions)
+            {
+                live.Grant(userId, permission);
+            }
+        }
+
+        return live;
+    }
+
     private static LockAuthorizationBehavior<EnterActualValueCommandRequest, Response<ActualValueDto>> CreateBehavior(
         TestDbContextLease lease,
         ICurrentUserService currentUserService,
-        TestBusinessClock? businessClock = null)
+        TestBusinessClock? businessClock = null,
+        IEffectivePermissionService? livePermissions = null)
     {
         // Default clock pins the business date to the fixture's last fiscal-year day
         // (2026-06-30), so the seeded 2025 fiscal year stays open unless a test moves the
@@ -396,19 +449,22 @@ public class LockAuthorizationBehaviorTests
             new KpiRepository(lease.Context),
             CreateLockService(lease),
             currentUserService,
-            businessClock ?? TestBusinessClock.On(new DateTime(2026, 6, 30, 9, 0, 0, DateTimeKind.Utc)));
+            businessClock ?? TestBusinessClock.On(new DateTime(2026, 6, 30, 9, 0, 0, DateTimeKind.Utc)),
+            livePermissions ?? CreateLivePermissions(currentUserService));
     }
 
     private static LockAuthorizationBehavior<EnterDivisionActualValueCommandRequest, Response<DivisionActualValueDto>> CreateDivisionBehavior(
         TestDbContextLease lease,
         ICurrentUserService currentUserService,
-        TestBusinessClock? businessClock = null)
+        TestBusinessClock? businessClock = null,
+        IEffectivePermissionService? livePermissions = null)
     {
         return new LockAuthorizationBehavior<EnterDivisionActualValueCommandRequest, Response<DivisionActualValueDto>>(
             new KpiRepository(lease.Context),
             CreateLockService(lease),
             currentUserService,
-            businessClock ?? TestBusinessClock.On(new DateTime(2026, 6, 30, 9, 0, 0, DateTimeKind.Utc)));
+            businessClock ?? TestBusinessClock.On(new DateTime(2026, 6, 30, 9, 0, 0, DateTimeKind.Utc)),
+            livePermissions ?? CreateLivePermissions(currentUserService));
     }
 
     private static async Task<(Guid KpiId, Guid ScorecardId, Guid PeriodId)> CreateFixtureWithLockAsync(TestDbContextLease lease)

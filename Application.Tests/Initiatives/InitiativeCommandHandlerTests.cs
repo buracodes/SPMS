@@ -27,6 +27,7 @@ public class InitiativeCommandHandlerTests
         new KraRepository(lease.Context),
         new KpiRepository(lease.Context),
         new UserRepository(lease.Context),
+        new DivisionRepository(lease.Context),
         user);
 
     private static InitiativeDtoFactory BuildFactory(TestRagThresholdService? thresholds = null) => new(
@@ -52,18 +53,37 @@ public class InitiativeCommandHandlerTests
         return user;
     }
 
+    private static async Task<Division> SeedDivisionAsync(TestDbContextLease lease, bool isActive = true)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var division = new Division
+        {
+            Id = Guid.NewGuid(),
+            Name = $"Division {suffix[..8]}",
+            Code = $"D{suffix[..8]}",
+            IsActive = isActive,
+            CreatedDate = DateTime.UtcNow
+        };
+
+        lease.Context.Divisions.Add(division);
+        await lease.Context.SaveChangesAsync();
+        return division;
+    }
+
     private static async Task<Initiative> SeedInitiativeAsync(
         TestDbContextLease lease,
-        User owner,
+        User? owner,
         InitiativeStatus status = InitiativeStatus.InProgress,
         DateTime? startDate = null,
-        DateTime? endDate = null)
+        DateTime? endDate = null,
+        Division? divisionOwner = null)
     {
         var initiative = new Initiative
         {
             Id = Guid.NewGuid(),
             Name = $"Initiative {Guid.NewGuid():N}"[..20],
-            OwnerId = owner.Id,
+            OwnerId = owner?.Id,
+            DivisionOwnerId = divisionOwner?.Id,
             Priority = InitiativePriority.High,
             Status = status,
             Budget = 1_000m,
@@ -669,6 +689,186 @@ Assert.Equal(100m, response.Data.ProgressPercentage);
 
         // A refused create must not leave a partially written row behind.
         Assert.Empty(await lease.Context.Initiatives.AsNoTracking().ToListAsync());
+    }
+
+    // -------------------------------------------- owner assignment: individual or division
+
+    /// <summary>
+    /// An initiative may be owned by a division instead of an individual. The two owner ids are
+    /// mutually exclusive, so a division-owned initiative has no individual owner.
+    /// </summary>
+    [Fact]
+    public async Task Create_AllowsADivisionOwner()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var actor = await SeedUserAsync(lease, "Actor One");
+        var division = await SeedDivisionAsync(lease);
+
+        var handler = new CreateInitiativeCommandHandler(
+            new InitiativeRepository(lease.Context),
+            new SpmsUnitOfWork(lease.Context),
+            BuildGuard(lease, Owner(actor)),
+            BuildFactory());
+
+        var response = await handler.Handle(
+            new CreateInitiativeCommandRequest
+            {
+                Name = $"Initiative {Guid.NewGuid():N}"[..20],
+                DivisionOwnerId = division.Id,
+                StartDate = DateTime.Today.AddDays(10),
+                EndDate = DateTime.Today.AddDays(40)
+            },
+            CancellationToken.None);
+
+        Assert.Null(response.Data.OwnerId);
+        Assert.Equal(division.Id, response.Data.DivisionOwnerId);
+
+        var stored = await lease.Context.Initiatives.AsNoTracking().SingleAsync();
+        Assert.Null(stored.OwnerId);
+        Assert.Equal(division.Id, stored.DivisionOwnerId);
+    }
+
+    [Fact]
+    public async Task Create_RejectsBothOwners()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var actor = await SeedUserAsync(lease, "Actor One");
+        var division = await SeedDivisionAsync(lease);
+
+        var handler = new CreateInitiativeCommandHandler(
+            new InitiativeRepository(lease.Context),
+            new SpmsUnitOfWork(lease.Context),
+            BuildGuard(lease, Owner(actor)),
+            BuildFactory());
+
+        var exception = await Assert.ThrowsAsync<BadRequestException>(() => handler.Handle(
+            new CreateInitiativeCommandRequest
+            {
+                Name = $"Initiative {Guid.NewGuid():N}"[..20],
+                OwnerId = actor.Id,
+                DivisionOwnerId = division.Id,
+                StartDate = DateTime.Today.AddDays(10),
+                EndDate = DateTime.Today.AddDays(40)
+            },
+            CancellationToken.None));
+
+        Assert.Contains("exactly one owner", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await lease.Context.Initiatives.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_RejectsNoOwner()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var actor = await SeedUserAsync(lease, "Actor One");
+
+        var handler = new CreateInitiativeCommandHandler(
+            new InitiativeRepository(lease.Context),
+            new SpmsUnitOfWork(lease.Context),
+            BuildGuard(lease, Owner(actor)),
+            BuildFactory());
+
+        var exception = await Assert.ThrowsAsync<BadRequestException>(() => handler.Handle(
+            new CreateInitiativeCommandRequest
+            {
+                Name = $"Initiative {Guid.NewGuid():N}"[..20],
+                StartDate = DateTime.Today.AddDays(10),
+                EndDate = DateTime.Today.AddDays(40)
+            },
+            CancellationToken.None));
+
+        Assert.Contains("exactly one owner", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await lease.Context.Initiatives.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_RejectsAnInactiveDivisionOwner()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var actor = await SeedUserAsync(lease, "Actor One");
+        var division = await SeedDivisionAsync(lease, isActive: false);
+
+        var handler = new CreateInitiativeCommandHandler(
+            new InitiativeRepository(lease.Context),
+            new SpmsUnitOfWork(lease.Context),
+            BuildGuard(lease, Owner(actor)),
+            BuildFactory());
+
+        var exception = await Assert.ThrowsAsync<BadRequestException>(() => handler.Handle(
+            new CreateInitiativeCommandRequest
+            {
+                Name = $"Initiative {Guid.NewGuid():N}"[..20],
+                DivisionOwnerId = division.Id,
+                StartDate = DateTime.Today.AddDays(10),
+                EndDate = DateTime.Today.AddDays(40)
+            },
+            CancellationToken.None));
+
+        Assert.Contains("active division", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(await lease.Context.Initiatives.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>Moving ownership between an individual and a division clears the other id.</summary>
+    [Fact]
+    public async Task Update_SwitchesOwnershipBetweenIndividualAndDivision()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var owner = await SeedUserAsync(lease, "Owner One");
+        var division = await SeedDivisionAsync(lease);
+        var initiative = await SeedInitiativeAsync(lease, owner);
+
+        var handler = new UpdateInitiativeCommandHandler(
+            new InitiativeRepository(lease.Context),
+            new MilestoneRepository(lease.Context),
+            new InitiativeUpdateLogRepository(lease.Context),
+            new SpmsUnitOfWork(lease.Context),
+            BuildGuard(lease, Owner(owner, Domain.Constants.Permissions.InitiativesEdit)),
+            BuildFactory());
+
+        await handler.Handle(
+            new UpdateInitiativeCommandRequest { Id = initiative.Id, DivisionOwnerId = division.Id },
+            CancellationToken.None);
+
+        var stored = await lease.Context.Initiatives.AsNoTracking().SingleAsync();
+        Assert.Null(stored.OwnerId);
+        Assert.Equal(division.Id, stored.DivisionOwnerId);
+
+        await handler.Handle(
+            new UpdateInitiativeCommandRequest { Id = initiative.Id, OwnerId = owner.Id },
+            CancellationToken.None);
+
+        stored = await lease.Context.Initiatives.AsNoTracking().SingleAsync();
+        Assert.Equal(owner.Id, stored.OwnerId);
+        Assert.Null(stored.DivisionOwnerId);
+    }
+
+    /// <summary>
+    /// A member of the owning division is treated as the initiative owner by the guard, so they can
+    /// report progress without being granted any extra permission.
+    /// </summary>
+    [Fact]
+    public async Task DivisionMember_IsTreatedAsTheAssignedOwner()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var member = await SeedUserAsync(lease, "Division Member");
+        var division = await SeedDivisionAsync(lease);
+        var initiative = await SeedInitiativeAsync(lease, null, divisionOwner: division);
+
+        var guard = BuildGuard(lease, new TestCurrentUserService
+        {
+            UserId = member.Id,
+            DivisionId = division.Id
+        });
+
+        guard.EnsureCanUpdateProgress(initiative);
+
+        var outsider = BuildGuard(lease, new TestCurrentUserService
+        {
+            UserId = member.Id,
+            DivisionId = Guid.NewGuid()
+        });
+
+        Assert.Throws<ForbiddenException>(() => outsider.EnsureCanUpdateProgress(initiative));
     }
 
     /// <summary>

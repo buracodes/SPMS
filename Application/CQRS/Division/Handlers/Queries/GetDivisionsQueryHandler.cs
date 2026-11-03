@@ -33,9 +33,9 @@ namespace Application.CQRS.Division.Handlers.Queries
             var hasPortfolioAccess = await organizationalScope.HasDivisionPortfolioAccessAsync(cancellationToken);
             if (!hasPortfolioAccess)
             {
-                var divisionId = organizationalScope.DivisionId;
-                divisions = divisionId.HasValue
-                    ? divisions.Where(d => d.Id == divisionId.Value).ToList()
+                var authorizedDivisionIds = organizationalScope.DivisionIds;
+                divisions = authorizedDivisionIds.Count > 0
+                    ? divisions.Where(d => authorizedDivisionIds.Contains(d.Id)).ToList()
                     : new List<Domain.Entities.Division>();
             }
             var divisionIds = divisions.Select(d => d.Id).ToList();

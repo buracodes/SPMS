@@ -17,6 +17,9 @@ public class GetAllInitiativeQuery : IRequest<PagedInitiativeDto>
 
     public Guid? OwnerId { get; set; }
 
+    /// <summary>Filters to initiatives owned by this division.</summary>
+    public Guid? DivisionOwnerId { get; set; }
+
     public bool IncludeClosed { get; set; } = true;
 
     public int Page { get; set; } = 1;

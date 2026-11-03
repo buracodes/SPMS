@@ -1,5 +1,6 @@
 using Application.Exceptions;
 using Application.Interface.IService;
+using System.Linq;
 
 namespace Application.CQRS.KpiActuals;
 
@@ -12,13 +13,14 @@ public static class KpiActualReadGuard
 {
     public static void EnsureReadAllowed(Domain.Entities.Kpi kpi, ICurrentUserService currentUserService)
     {
-        if (!currentUserService.DivisionId.HasValue)
+        var divisionScope = currentUserService.DivisionIds;
+        if (divisionScope.Count == 0)
         {
             return;
         }
 
-        var division = currentUserService.DivisionId.Value;
-        var divisionOwned = kpi.DivisionOwnerId.HasValue && kpi.DivisionOwnerId.Value == division;
+        var divisionOwned = kpi.DivisionOwnerId.HasValue
+            && divisionScope.Contains(kpi.DivisionOwnerId.Value);
         var userOwned = kpi.OwnerId.HasValue
             && currentUserService.UserId.HasValue
             && kpi.OwnerId.Value == currentUserService.UserId.Value;

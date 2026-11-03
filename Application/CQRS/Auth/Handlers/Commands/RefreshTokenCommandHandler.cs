@@ -20,19 +20,22 @@ namespace Application.CQRS.Auth.Handlers.Commands
         private readonly ITokenService tokenService;
         private readonly SecurityOptions securityOptions;
         private readonly IEffectivePermissionService effectivePermissionService;
+        private readonly IEmployeeAccessResolver employeeAccess;
 
         public RefreshTokenCommandHandler(
             IRefreshTokenRepository _refreshTokenRepository,
             IUserRepository _userRepository,
             ITokenService _tokenService,
             SecurityOptions _securityOptions,
-            IEffectivePermissionService _effectivePermissionService)
+            IEffectivePermissionService _effectivePermissionService,
+            IEmployeeAccessResolver _employeeAccess)
         {
             refreshTokenRepository = _refreshTokenRepository;
             userRepository = _userRepository;
             tokenService = _tokenService;
             securityOptions = _securityOptions;
             effectivePermissionService = _effectivePermissionService;
+            employeeAccess = _employeeAccess;
         }
 
         public async Task<Response<TokenResponseDto>> Handle(RefreshTokenCommandRequest request, CancellationToken cancellationToken)
@@ -82,6 +85,9 @@ namespace Application.CQRS.Auth.Handlers.Commands
 
             var effectivePermissions = await effectivePermissionService.GetEffectiveGrantNamesAsync(user.Id, cancellationToken);
             var permissions = effectivePermissions.ToList();
+            var accessSnapshot = await employeeAccess.ResolveAsync(user.Id, cancellationToken);
+            var divisionId = accessSnapshot.DivisionId;
+            var divisionIds = accessSnapshot.ScopedDivisionIds;
 
             var accessToken = tokenService.CreateAccessToken(user.Id, user.Username, roles, permissions);
 
@@ -100,7 +106,8 @@ namespace Application.CQRS.Auth.Handlers.Commands
                         Username = user.Username,
                         FullName = user.FullName,
                         Email = user.Email,
-                        DivisionId = user.DivisionId,
+                        DivisionId = divisionId,
+                        DivisionIds = divisionIds,
                         Roles = roles,
                         Permissions = permissions
                     }

@@ -12,6 +12,9 @@ namespace Application.DTOS.Auth
         public string? Email { get; set; }
         public Guid? DivisionId { get; set; }
 
+        /// <summary>Every division this principal is authorized for; the primary division is first.</summary>
+        public IReadOnlyList<Guid> DivisionIds { get; set; } = Array.Empty<Guid>();
+
         public IReadOnlyList<string> Roles { get; set; } = Array.Empty<string>();
         public IReadOnlyList<string> Permissions { get; set; } = Array.Empty<string>();
     }

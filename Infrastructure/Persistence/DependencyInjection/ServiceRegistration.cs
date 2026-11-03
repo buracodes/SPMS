@@ -81,6 +81,7 @@ namespace Infrastructure.Persistence.DependencyInjection
             services.AddScoped<IRbacRepository, RbacRepository>();
             services.AddScoped<IEffectivePermissionService, EffectivePermissionService>();
             services.AddScoped<IPositionPermissionProvider, HrPositionPermissionProvider>();
+            services.AddScoped<IEmployeeAccessResolver, HrEmployeeAccessResolver>();
 
             services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
             services.AddScoped<ITokenService, JwtTokenService>();

@@ -66,6 +66,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, AnyPermissionAuthorizationHandler>();
 builder.Services.AddScoped<IClaimsTransformation, UserClaimsTransformation>();
 builder.Services.AddAuthorization(options =>
 {
@@ -74,6 +75,19 @@ builder.Services.AddAuthorization(options =>
         options.AddPolicy(permission.Name, policy =>
             policy.Requirements.Add(new PermissionRequirement(permission.Name)));
     }
+
+    // Baseline division rights and the broad corporate role rights both reach the same
+    // read actions; the handler resolves the any-of set through the central evaluator.
+    options.AddPolicy(AnyPermissionPolicyNames.DivisionRead, policy =>
+        policy.Requirements.Add(new AnyPermissionRequirement(
+            Permissions.DivisionView,
+            Permissions.DivisionScorecardView,
+            Permissions.DivisionPerformanceView)));
+
+    options.AddPolicy(AnyPermissionPolicyNames.InitiativeRead, policy =>
+        policy.Requirements.Add(new AnyPermissionRequirement(
+            Permissions.InitiativesView,
+            Permissions.DivisionInitiativeView)));
 });
 
 builder.Services.AddProblemDetails();

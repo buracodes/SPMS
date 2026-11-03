@@ -12,10 +12,12 @@ namespace Application.Services;
 
 /// <summary>
 /// Role driven dashboard. A single shared shell is fed by this service: it resolves the
-/// caller's role from the authenticated claims, decides which widgets and actions the role
-/// may receive, and applies the data scope (organization wide or assigned only) to every
-/// query before any payload is projected. Scores always come from the existing SPMS
-/// calculation engine (<see cref="IScorePeriodCalculationService"/>) - never recalculated here.
+/// caller's live effective permissions, decides which widgets and actions the caller may
+/// receive, and applies the data scope (organization wide, division or assigned only) to
+/// every query before any payload is projected. JWT permission claims are never used for
+/// composition or scoping, so revocation matches endpoint authorization on the next request.
+/// Scores always come from the existing SPMS calculation engine
+/// (<see cref="IScorePeriodCalculationService"/>) - never recalculated here.
 /// </summary>
 public sealed partial class RoleDashboardService : IRoleDashboardService
 {
@@ -40,6 +42,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
     private readonly IInitiativeProgressCalculator initiativeProgressCalculator;
     private readonly IBusinessClock businessClock;
     private readonly IRagThresholdService ragThresholdService;
+    private readonly IEffectivePermissionService effectivePermissionService;
 
     public RoleDashboardService(
         ICurrentUserService currentUserService,
@@ -62,7 +65,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         IGenericRepository<Role> roleRepository,
         IInitiativeProgressCalculator initiativeProgressCalculator,
         IBusinessClock businessClock,
-        IRagThresholdService ragThresholdService)
+        IRagThresholdService ragThresholdService,
+        IEffectivePermissionService effectivePermissionService)
     {
         this.currentUserService = currentUserService;
         this.scorePeriodCalculationService = scorePeriodCalculationService;
@@ -85,6 +89,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         this.initiativeProgressCalculator = initiativeProgressCalculator;
         this.businessClock = businessClock;
         this.ragThresholdService = ragThresholdService;
+        this.effectivePermissionService = effectivePermissionService;
     }
 
     private const int MaxScorecardsForComparison = 12;
@@ -99,8 +104,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
     public async Task<DashboardRoleContextDto> GetContextAsync(
         DashboardFilterQuery? filter, CancellationToken cancellationToken = default)
     {
-        var profile = ResolveProfile();
-        var permissions = currentUserService.Permissions;
+        var permissions = await ResolvePermissionsAsync(cancellationToken);
+        var profile = ResolveProfile(permissions);
         var load = await LoadAsync(profile, permissions, filter, cancellationToken);
 
         return new DashboardRoleContextDto
@@ -113,8 +118,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             ReadOnly = profile.IsReadOnly,
             Filter = BuildFilterDto(load),
             Widgets = load.Widgets.Select(ToWidgetDto).ToList(),
-            QuickActions = DashboardRoleCatalog
-                .ResolveActions(profile, permissions)
+            QuickActions = profile.QuickActions
                 .Select(a => new DashboardQuickActionDto
                 {
                     Key = a.Key,
@@ -135,8 +139,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
     public async Task<DashboardWidgetBundleDto> GetWidgetsAsync(
         DashboardFilterQuery? filter, CancellationToken cancellationToken = default)
     {
-        var profile = ResolveProfile();
-        var permissions = currentUserService.Permissions;
+        var permissions = await ResolvePermissionsAsync(cancellationToken);
+        var profile = ResolveProfile(permissions);
         var load = await LoadAsync(profile, permissions, filter, cancellationToken);
 
         var bundle = new DashboardWidgetBundleDto
@@ -156,11 +160,16 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         bundle.OverallScore = load.Has(DashboardRoleCatalog.WidgetOverallScore) ? BuildOverallScore(load) : null;
         bundle.RagDistribution = load.Has(DashboardRoleCatalog.WidgetRagDistribution) ? BuildRagDistribution(load) : null;
         bundle.PerformanceTrend = load.Has(DashboardRoleCatalog.WidgetPerformanceTrend) ? BuildPerformanceTrend(load) : null;
+        bundle.KpiPerformanceTrend = load.Has(DashboardRoleCatalog.WidgetKpiPerformanceTrend) ? BuildKpiPerformanceTrend(load) : null;
         bundle.ScorecardPerformance = load.Has(DashboardRoleCatalog.WidgetScorecardPerformance) ? await BuildScorecardPerformanceAsync(load, cancellationToken) : null;
         bundle.ScorecardHealth = load.Has(DashboardRoleCatalog.WidgetScorecardHealth) ? await BuildScorecardHealthAsync(load, cancellationToken) : null;
         bundle.TargetVsActual = load.Has(DashboardRoleCatalog.WidgetTargetVsActual) ? BuildTargetVsActual(load) : null;
         bundle.GoalHealth = load.Has(DashboardRoleCatalog.WidgetGoalHealth) ? BuildGoalTable(load, drillDown: true) : null;
-        bundle.GoalPerformance = load.Has(DashboardRoleCatalog.WidgetGoalPerformance) ? BuildGoalTable(load, drillDown: false) : null;
+        bundle.GoalPerformance = load.Has(DashboardRoleCatalog.WidgetGoalPerformance)
+            ? load.IsDivisionScoped
+                ? BuildDivisionGoalTable(load)
+                : BuildGoalTable(load, drillDown: false)
+            : null;
         bundle.GoalPerformanceChart = load.Has(DashboardRoleCatalog.WidgetGoalPerformanceChart) ? BuildGoalPerformanceChart(load) : null;
         bundle.TopBottomKpis = load.Has(DashboardRoleCatalog.WidgetTopBottomKpis) ? await BuildTopBottomKpisAsync(load, cancellationToken) : null;
         bundle.KpiExceptions = load.Has(DashboardRoleCatalog.WidgetKpiExceptions) ? await BuildKpiExceptionsAsync(load, cancellationToken) : null;
@@ -200,15 +209,34 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
     public async Task<GoalDrilldownDto> GetGoalDrilldownAsync(
         Guid goalId, DashboardFilterQuery? filter, CancellationToken cancellationToken = default)
     {
-        var profile = ResolveProfile();
-        var permissions = currentUserService.Permissions;
+        var permissions = await ResolvePermissionsAsync(cancellationToken);
+        var profile = ResolveProfile(permissions);
+        var load = await LoadAsync(profile, permissions, filter, cancellationToken);
+
+        if (load.IsDivisionScoped)
+        {
+            // A division employee reaches the Division Goal -> KPI hierarchy through the
+            // division read rights, not through the corporate goals:view right.
+            if (!permissions.Contains(Permissions.DivisionScorecardView)
+                && !permissions.Contains(Permissions.DivisionPerformanceView)
+                && !permissions.Contains(Permissions.GoalsView))
+            {
+                throw new Exceptions.UnauthorizedException("You do not have permission to view division goals.");
+            }
+
+            // Only the selected division plan's goals are loaded, so a corporate goal id or a
+            // sibling division's goal id resolves to an empty payload instead of its KRAs.
+            var divisionGoal = load.DivisionGoals.FirstOrDefault(g => g.Id == goalId);
+            return divisionGoal is null
+                ? new GoalDrilldownDto { GoalId = goalId, GoalName = string.Empty }
+                : BuildDivisionGoalDrilldown(load, divisionGoal);
+        }
 
         if (!permissions.Contains(Permissions.GoalsView))
         {
             throw new Exceptions.UnauthorizedException("You do not have permission to view goals.");
         }
 
-        var load = await LoadAsync(profile, permissions, filter, cancellationToken);
         var goal = load.Goals.FirstOrDefault(g => g.Id == goalId);
 
         if (goal is null)
@@ -222,7 +250,31 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
 
     // ------------------------------------------------------------------ role + scope
 
-    private DashboardRoleProfile ResolveProfile() => DashboardRoleCatalog.Resolve(currentUserService.Roles);
+    /// <summary>
+    /// Composition is derived from the live effective permissions plus the current division
+    /// claim. The permission claims minted into the JWT are deliberately not consulted:
+    /// endpoint authorization resolves the same live state, so a revoked grant must also
+    /// disappear from widget composition and data scoping on the very next request.
+    /// Role claims are passed through for the display persona only; they never widen scope,
+    /// widgets or actions.
+    /// </summary>
+    private DashboardRoleProfile ResolveProfile(IReadOnlyCollection<string> permissions)
+        => DashboardRoleCatalog.Resolve(
+            permissions,
+            currentUserService.DivisionId,
+            currentUserService.Roles);
+
+    private async Task<IReadOnlyCollection<string>> ResolvePermissionsAsync(CancellationToken cancellationToken)
+    {
+        var userId = currentUserService.UserId;
+        if (userId is not Guid id || id == Guid.Empty)
+        {
+            return Array.Empty<string>();
+        }
+
+        var grants = await effectivePermissionService.GetEffectiveGrantNamesAsync(id, cancellationToken);
+        return grants.ToArray();
+    }
 
     /// <summary>Assigned KPI ids for a data entry user: owner or division owner.</summary>
     private bool IsAssignedToCurrentUser(Kpi kpi)
@@ -233,8 +285,9 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             return false;
         }
 
-        var divisionId = currentUserService.DivisionId;
-        var divisionOwned = divisionId.HasValue && kpi.DivisionOwnerId == divisionId;
+        var divisionIds = currentUserService.DivisionIds;
+        var divisionOwned = kpi.DivisionOwnerId.HasValue
+            && divisionIds.Contains(kpi.DivisionOwnerId.Value);
 
         return kpi.OwnerId == userId || divisionOwned;
     }
@@ -247,11 +300,25 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         public required IReadOnlyList<DashboardWidgetDefinition> Widgets { get; init; }
         public required IReadOnlyCollection<string> Permissions { get; init; }
 
+        /// <summary>
+        /// True when the caller carries an HR division claim. The division claim is authoritative:
+        /// the dashboard is then limited to that division's plans, KPIs and initiatives regardless
+        /// of any broad read permission that may also have been granted.
+        /// </summary>
+        public bool IsDivisionScoped { get; init; }
+
         public FiscalYear? FiscalYear { get; set; }
         public IReadOnlyList<FiscalPeriod> Periods { get; set; } = Array.Empty<FiscalPeriod>();
         public IReadOnlyList<Scorecard> Scorecards { get; set; } = Array.Empty<Scorecard>();
         public Scorecard? SelectedScorecard { get; set; }
         public IReadOnlyList<Goal> Goals { get; set; } = Array.Empty<Goal>();
+
+        /// <summary>Division goals of the employee's own plan; empty for organization scope.</summary>
+        public IReadOnlyList<DivisionGoal> DivisionGoals { get; set; } = Array.Empty<DivisionGoal>();
+
+        /// <summary>The authorized division whose plan backs the selected scorecard, if any.</summary>
+        public Guid? SelectedDivisionId { get; set; }
+
         public IReadOnlyList<Kpi> Kpis { get; set; } = Array.Empty<Kpi>();
         public IReadOnlyDictionary<Guid, ScorePeriodResult> PeriodResults { get; set; }
             = new Dictionary<Guid, ScorePeriodResult>();
@@ -294,8 +361,9 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         var load = new DashboardLoad
         {
             Profile = profile,
-            Widgets = DashboardRoleCatalog.ResolveWidgets(profile, permissions),
+            Widgets = profile.Widgets,
             Permissions = permissions,
+            IsDivisionScoped = currentUserService.DivisionIds.Count > 0,
             BusinessDate = businessClock.BusinessDate,
             // FR-607: load the effective thresholds once per dashboard request so every widget,
             // chart and alert bands the same score identically.
@@ -336,9 +404,16 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             || load.Has(DashboardRoleCatalog.WidgetBudgetAllocationChart)
             || load.Has(DashboardRoleCatalog.WidgetAlerts))
         {
-            load.Initiatives = profile.DataScope == DashboardDataScope.AssignedOnly && currentUserService.UserId is Guid initiativeOwnerId
-                ? await initiativeRepository.GetByOwnerIdWithMilestonesAsync(initiativeOwnerId)
-                : await initiativeRepository.GetAllWithMilestonesAsync();
+            // A division claim is authoritative: the employee only ever sees initiatives they
+            // own or that belong to their own divisions, even when a broad read right is granted.
+            load.Initiatives = load.IsDivisionScoped
+                ? await initiativeRepository.GetByOwnerIdWithMilestonesAsync(
+                    currentUserService.UserId ?? Guid.Empty,
+                    currentUserService.DivisionIds)
+                : profile.DataScope == DashboardDataScope.AssignedOnly && currentUserService.UserId is Guid initiativeOwnerId
+                    ? await initiativeRepository.GetByOwnerIdWithMilestonesAsync(
+                        initiativeOwnerId, currentUserService.DivisionIds)
+                    : await initiativeRepository.GetAllWithMilestonesAsync();
         }
 
         // ---- scorecards the caller may see, honouring the data scope
@@ -349,11 +424,19 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             .ThenBy(s => s.Name)
             .ToList();
 
+        // Division scoped callers only see scorecards their divisions actually plan on.
+        if (load.IsDivisionScoped)
+        {
+            var divisionPlans = await divisionPlanRepository.GetByDivisionIdsAsync(currentUserService.DivisionIds);
+            var planScorecardIds = divisionPlans.Select(p => p.ScorecardId).ToHashSet();
+            inYear = inYear.Where(s => planScorecardIds.Contains(s.Id)).ToList();
+        }
+
         if (profile.DataScope == DashboardDataScope.AssignedOnly)
         {
             // A data entry user may only work with scorecards that actually contain their KPIs.
             var userId = currentUserService.UserId;
-            var divisionId = currentUserService.DivisionId;
+            var divisionIds = currentUserService.DivisionIds;
             if (userId is Guid ownerId)
             {
                 var ownedKpiScorecards = allScorecards
@@ -365,7 +448,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
                 foreach (var scorecardId in ownedKpiScorecards)
                 {
                     var scorecardKpis = await kpiRepository.GetByScorecardAsync(scorecardId);
-                    if (scorecardKpis.Any(k => k.OwnerId == ownerId || (divisionId.HasValue && k.DivisionOwnerId == divisionId)))
+                    if (scorecardKpis.Any(k => k.OwnerId == ownerId
+                        || (k.DivisionOwnerId.HasValue && divisionIds.Contains(k.DivisionOwnerId.Value))))
                     {
                         assignedScorecardIds.Add(scorecardId);
                     }
@@ -403,78 +487,143 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
 
         var selectedScorecard = load.SelectedScorecard;
 
-        // ---- hierarchy for the selected scorecard
-        var goals = await goalRepository.GetByScorecardAsync(selectedScorecard.Id);
-        var kpis = await kpiRepository.GetByScorecardAsync(selectedScorecard.Id);
-
-        if (profile.DataScope == DashboardDataScope.AssignedOnly)
-        {
-            kpis = kpis.Where(IsAssignedToCurrentUser).ToList();
-
-            // Only keep goals that still own at least one assigned KPI, so nothing leaks.
-            var referencedGoalIds = kpis
-                .Where(k => k.Kra is not null)
-                .Select(k => k.Kra!.GoalId)
-                .ToHashSet();
-
-            goals = goals.Where(g => referencedGoalIds.Contains(g.Id)).ToList();
-        }
-
-        load.Goals = goals;
-        load.Kpis = kpis;
-        load.KpiCountByGoal = goals.ToDictionary(
-            g => g.Id,
-            g => kpis.Count(k => k.Kra?.GoalId == g.Id));
-
-        // ---- period scores from the shared calculation engine
+        // ---- hierarchy and period scores (division scoped callers are limited to their own plan)
         var periodType = Enum.Parse<PeriodType>(load.RequestedPeriodType);
         var quarter = load.RequestedQuarter;
         var fromMonth = load.RequestedFromMonth;
         var toMonth = load.RequestedToMonth;
 
-        var comparisonScorecards = load.Scorecards.Take(MaxScorecardsForComparison).ToList();
-        if (comparisonScorecards.All(s => s.Id != selectedScorecard.Id))
+        if (load.IsDivisionScoped)
         {
-            comparisonScorecards.Insert(0, selectedScorecard);
-        }
-
-        var periodResults = new Dictionary<Guid, ScorePeriodResult>();
-        foreach (var scorecard in comparisonScorecards)
-        {
-            periodResults[scorecard.Id] = await scorePeriodCalculationService.CalculateAsync(
-                scorecard.Id,
-                fiscalYear.Id,
-                periodType,
-                quarter,
-                fromMonth,
-                toMonth,
-                null,
-                cancellationToken);
-        }
-
-        load.PeriodResults = periodResults;
-
-        var selectedScorecardId = selectedScorecard.Id;
-        if (periodResults.TryGetValue(selectedScorecardId, out var selectedResult))
-        {
-            load.SelectedPeriodResult = selectedResult;
-
-            // Full year run feeds the trend widgets and the consecutive-red-month alert.
-            if (periodType != PeriodType.Year)
+            // A scorecard may be planned on by any of the caller's authorized divisions; the
+            // primary division's plan wins when more than one exists.
+            DivisionPlan? plan = null;
+            foreach (var divisionId in currentUserService.DivisionIds)
             {
-                load.SelectedYearResult = await scorePeriodCalculationService.CalculateAsync(
-                    selectedScorecardId,
+                plan = await divisionPlanRepository.GetByDivisionAndScorecardWithDetailsAsync(
+                    divisionId, selectedScorecard.Id);
+                if (plan is not null)
+                {
+                    load.SelectedDivisionId = divisionId;
+                    break;
+                }
+            }
+
+            if (plan is null)
+            {
+                return load;
+            }
+
+            load.DivisionGoals = plan.Goals.Where(g => !g.IsDeleted).ToList();
+            load.Kpis = plan.Goals
+                .SelectMany(g => g.Kpis)
+                .Where(k => !k.IsDeleted)
+                .ToList();
+            load.Goals = Array.Empty<Goal>();
+            load.KpiCountByGoal = new Dictionary<Guid, int>();
+
+            var divisionPeriodResult = ToScorePeriodResult(
+                await divisionPeriodCalculationService.CalculateAsync(
+                    plan.Id,
+                    selectedScorecard.Id,
                     fiscalYear.Id,
-                    PeriodType.Year,
+                    periodType,
+                    quarter,
+                    fromMonth,
+                    toMonth,
                     null,
-                    null,
-                    null,
+                    cancellationToken),
+                selectedScorecard.Id);
+
+            load.SelectedPeriodResult = divisionPeriodResult;
+            load.SelectedYearResult = periodType == PeriodType.Year
+                ? divisionPeriodResult
+                : ToScorePeriodResult(
+                    await divisionPeriodCalculationService.CalculateAsync(
+                        plan.Id,
+                        selectedScorecard.Id,
+                        fiscalYear.Id,
+                        PeriodType.Year,
+                        null,
+                        null,
+                        null,
+                        null,
+                        cancellationToken),
+                    selectedScorecard.Id);
+            load.PeriodResults = new Dictionary<Guid, ScorePeriodResult>
+            {
+                [selectedScorecard.Id] = divisionPeriodResult
+            };
+        }
+        else
+        {
+            var goals = await goalRepository.GetByScorecardAsync(selectedScorecard.Id);
+            var kpis = await kpiRepository.GetByScorecardAsync(selectedScorecard.Id);
+
+            if (profile.DataScope == DashboardDataScope.AssignedOnly)
+            {
+                kpis = kpis.Where(IsAssignedToCurrentUser).ToList();
+
+                // Only keep goals that still own at least one assigned KPI, so nothing leaks.
+                var referencedGoalIds = kpis
+                    .Where(k => k.Kra is not null)
+                    .Select(k => k.Kra!.GoalId)
+                    .ToHashSet();
+
+                goals = goals.Where(g => referencedGoalIds.Contains(g.Id)).ToList();
+            }
+
+            load.Goals = goals;
+            load.Kpis = kpis;
+            load.KpiCountByGoal = goals.ToDictionary(
+                g => g.Id,
+                g => kpis.Count(k => k.Kra?.GoalId == g.Id));
+
+            // ---- period scores from the shared calculation engine
+            var comparisonScorecards = load.Scorecards.Take(MaxScorecardsForComparison).ToList();
+            if (comparisonScorecards.All(s => s.Id != selectedScorecard.Id))
+            {
+                comparisonScorecards.Insert(0, selectedScorecard);
+            }
+
+            var periodResults = new Dictionary<Guid, ScorePeriodResult>();
+            foreach (var scorecard in comparisonScorecards)
+            {
+                periodResults[scorecard.Id] = await scorePeriodCalculationService.CalculateAsync(
+                    scorecard.Id,
+                    fiscalYear.Id,
+                    periodType,
+                    quarter,
+                    fromMonth,
+                    toMonth,
                     null,
                     cancellationToken);
             }
-            else
+
+            load.PeriodResults = periodResults;
+
+            var selectedScorecardId = selectedScorecard.Id;
+            if (periodResults.TryGetValue(selectedScorecardId, out var selectedResult))
             {
-                load.SelectedYearResult = selectedResult;
+                load.SelectedPeriodResult = selectedResult;
+
+                // Full year run feeds the trend widgets and the consecutive-red-month alert.
+                if (periodType != PeriodType.Year)
+                {
+                    load.SelectedYearResult = await scorePeriodCalculationService.CalculateAsync(
+                        selectedScorecardId,
+                        fiscalYear.Id,
+                        PeriodType.Year,
+                        null,
+                        null,
+                        null,
+                        null,
+                        cancellationToken);
+                }
+                else
+                {
+                    load.SelectedYearResult = selectedResult;
+                }
             }
         }
 
@@ -518,6 +667,26 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         "month" => PeriodType.Month,
         "year" => PeriodType.Year,
         _ => PeriodType.Ytd
+    };
+
+    /// <summary>
+    /// Adapts a division plan result to the shape the dashboard widgets read. Only the division's
+    /// own KPI scores and overall score are carried, so a corporate scorecard figure never leaks
+    /// into a division scoped dashboard.
+    /// </summary>
+    private static ScorePeriodResult ToScorePeriodResult(DivisionPeriodResult result, Guid scorecardId) => new()
+    {
+        Scope = result.Scope,
+        Kpis = result.Kpis,
+        // Division goals are keyed by their own id, so GoalScore() can read the division
+        // rollup without ever exposing corporate goal ids or scores.
+        Goals = result.DivisionGoals,
+        Kras = new Dictionary<Guid, EntityScorePeriod>(),
+        Scorecards = new Dictionary<Guid, EntityScorePeriod>
+        {
+            [scorecardId] = new() { PeriodScore = result.OverallScore }
+        },
+        FiscalPeriodByMonth = result.FiscalPeriodByMonth
     };
 
     private static int? Clamp(int? value, int min, int max)

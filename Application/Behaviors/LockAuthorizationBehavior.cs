@@ -6,6 +6,7 @@ using Application.Interface.IService;
 using Application.Services;
 using Domain.Constants;
 using MediatR;
+using System.Linq;
 
 namespace Application.Behaviors;
 
@@ -16,35 +17,38 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
     private readonly IPeriodLockStatusService lockStatusService;
     private readonly ICurrentUserService currentUserService;
     private readonly IBusinessClock businessClock;
+    private readonly IEffectivePermissionService effectivePermissionService;
 
     public LockAuthorizationBehavior(
         IKpiRepository _kpiRepository,
         IPeriodLockStatusService _lockStatusService,
         ICurrentUserService _currentUserService,
-        IBusinessClock _businessClock)
+        IBusinessClock _businessClock,
+        IEffectivePermissionService _effectivePermissionService)
     {
         kpiRepository = _kpiRepository;
         lockStatusService = _lockStatusService;
         currentUserService = _currentUserService;
         businessClock = _businessClock;
+        effectivePermissionService = _effectivePermissionService;
     }
 
     public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
     {
         if (request is EnterActualValueCommandRequest command && command.Dto != null)
         {
-            await AuthorizeActualValueWriteAsync(command.Dto.KpiId, command.Dto.FiscalPeriodId, command.Dto.OverrideReason, allowDivisionOwnership: false);
+            await AuthorizeActualValueWriteAsync(command.Dto.KpiId, command.Dto.FiscalPeriodId, command.Dto.OverrideReason, allowDivisionOwnership: false, cancellationToken);
         }
 
         if (request is EnterDivisionActualValueCommandRequest divisionCommand && divisionCommand.Dto != null)
         {
-            await AuthorizeActualValueWriteAsync(divisionCommand.Dto.KpiId, divisionCommand.Dto.FiscalPeriodId, divisionCommand.Dto.OverrideReason, allowDivisionOwnership: true);
+            await AuthorizeActualValueWriteAsync(divisionCommand.Dto.KpiId, divisionCommand.Dto.FiscalPeriodId, divisionCommand.Dto.OverrideReason, allowDivisionOwnership: true, cancellationToken);
         }
 
         return await next();
     }
 
-    private async Task AuthorizeActualValueWriteAsync(Guid kpiId, Guid fiscalPeriodId, string? overrideReason, bool allowDivisionOwnership)
+    private async Task AuthorizeActualValueWriteAsync(Guid kpiId, Guid fiscalPeriodId, string? overrideReason, bool allowDivisionOwnership, CancellationToken cancellationToken)
     {
         var kpi = await kpiRepository.GetByIdWithScorecardAsync(kpiId);
         if (kpi == null || kpi.Scorecard == null)
@@ -57,12 +61,19 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
         // FR-906: division KPIs are owned by a division, not an individual user, so the
         // division account must be accepted as the owner during the open window. An
         // unassigned division KPI (DivisionOwnerId is optional) falls through to the
-        // handler, which verifies the KPI belongs to the caller's own division plan.
+        // handler, which verifies the KPI belongs to an authorized division plan.
+        var divisionScope = currentUserService.DivisionIds;
         var isDivisionOwner = allowDivisionOwnership
-            && currentUserService.DivisionId.HasValue
-            && (kpi.DivisionOwnerId == currentUserService.DivisionId
-                || (kpi.DivisionOwnerId == null && kpi.DivisionGoalId.HasValue));
-        var canOverride = currentUserService.Permissions.Contains(Permissions.ActualsOverride);
+            && divisionScope.Count > 0
+            && (kpi.DivisionOwnerId.HasValue
+                ? divisionScope.Contains(kpi.DivisionOwnerId.Value)
+                : kpi.DivisionGoalId.HasValue);
+
+        // The override right is resolved live: a revoked grant must stop bypassing closure
+        // and lock rules on the next request, even though the JWT still carries the claim.
+        var canOverride = currentUserId.HasValue
+            && await effectivePermissionService.HasPermissionAsync(
+                currentUserId.Value, Permissions.ActualsOverride, cancellationToken);
 
         // Closed fiscal year / scorecard (FR-703): read-only unless an audited
         // Admin/Power User override with a reason is supplied. The closing boundary is

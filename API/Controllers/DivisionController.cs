@@ -1,3 +1,4 @@
+using API.Authorization;
 using Application.CQRS.Division.Requests.Commands;
 using Application.CQRS.Division.Requests.Queries;
 using Asp.Versioning;
@@ -22,7 +23,7 @@ namespace API.Controllers
         }
 
         [HttpGet]
-        [Authorize(Policy = Permissions.DivisionView)]
+        [Authorize(Policy = AnyPermissionPolicyNames.DivisionRead)]
         public async Task<ActionResult> GetDivisions()
         {
             var result = await mediator.Send(new GetDivisionsQueryRequest());
@@ -37,8 +38,20 @@ namespace API.Controllers
             return StatusCode(StatusCodes.Status201Created, result);
         }
 
+        /// <summary>
+        /// Imports every division HR organizes positions under into the local Division table. HR is
+        /// only read; local rows are created or refreshed in place.
+        /// </summary>
+        [HttpPost("sync")]
+        [Authorize(Policy = Permissions.DivisionManage)]
+        public async Task<ActionResult> SyncFromHr()
+        {
+            var result = await mediator.Send(new SyncDivisionsFromHrCommandRequest());
+            return Ok(result);
+        }
+
         [HttpGet("{divisionId:guid}/plans")]
-        [Authorize(Policy = Permissions.DivisionView)]
+        [Authorize(Policy = AnyPermissionPolicyNames.DivisionRead)]
         public async Task<ActionResult> GetPlans(Guid divisionId)
         {
             var result = await mediator.Send(new GetDivisionPlansQueryRequest { DivisionId = divisionId });
@@ -46,7 +59,7 @@ namespace API.Controllers
         }
 
         [HttpGet("{divisionId:guid}/plans/{scorecardId:guid}")]
-        [Authorize(Policy = Permissions.DivisionView)]
+        [Authorize(Policy = AnyPermissionPolicyNames.DivisionRead)]
         public async Task<ActionResult> GetPlan(Guid divisionId, Guid scorecardId)
         {
             var result = await mediator.Send(new GetDivisionPlanQueryRequest { DivisionId = divisionId, ScorecardId = scorecardId });
@@ -54,7 +67,7 @@ namespace API.Controllers
         }
 
         [HttpGet("plans/by-scorecard/{scorecardId:guid}")]
-        [Authorize(Policy = Permissions.DivisionView)]
+        [Authorize(Policy = AnyPermissionPolicyNames.DivisionRead)]
         public async Task<ActionResult> GetPlanContextByScorecard(
             Guid scorecardId,
             [FromQuery] Guid? divisionId = null,
@@ -158,7 +171,7 @@ namespace API.Controllers
         }
 
         [HttpGet("actuals")]
-        [Authorize(Policy = Permissions.DivisionView)]
+        [Authorize(Policy = AnyPermissionPolicyNames.DivisionRead)]
         public async Task<ActionResult> GetActuals([FromQuery] Guid divisionId, [FromQuery] Guid fiscalYearId)
         {
             var result = await mediator.Send(new GetDivisionActualValuesQueryRequest

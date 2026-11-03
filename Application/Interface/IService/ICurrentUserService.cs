@@ -13,6 +13,12 @@ namespace Application.Interface.IService
         /// <summary>Division carried by the authenticated principal's claims, if it is a division account.</summary>
         Guid? DivisionId { get; }
 
+        /// <summary>
+        /// Every division in the authenticated principal's live scope: the HR primary division
+        /// first, followed by explicitly authorized divisions. Empty for a corporate principal.
+        /// </summary>
+        IReadOnlyList<Guid> DivisionIds { get; }
+
         /// <summary>Roles carried by the authenticated principal's claims.</summary>
         IReadOnlyList<string> Roles { get; }
     }

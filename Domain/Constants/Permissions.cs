@@ -73,6 +73,28 @@ namespace Domain.Constants
         public const string DivisionActualsEnter = "divisions:actuals.enter";
         public const string DivisionReportsView = "divisions:reports.view";
 
+        // ── Baseline access for every active HR employee ───────────────────────
+        // These are system-defined defaults, not group assignments. They are granted to an
+        // active HR employee even with no group or direct rights, and every one is only ever
+        // interpreted together with the employee's HR division scope.
+        public const string DivisionScorecardView = "division:scorecard.view";
+        public const string DivisionPerformanceView = "division:performance.view";
+        public const string DivisionInitiativeView = "division:initiative.view";
+
+        /// <summary>
+        /// The view-only baseline every active HR employee receives. Corporate scorecard,
+        /// actual-entry, edit and RBAC rights are deliberately absent.
+        /// </summary>
+        public static readonly IReadOnlySet<string> BaselinePermissions =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                DashboardView,
+                OrganizationView,
+                DivisionScorecardView,
+                DivisionPerformanceView,
+                DivisionInitiativeView
+            };
+
         public const string AdminUsersManage = "admin:users.manage";
         public const string AdminRolesManage = "admin:roles.manage";
         public const string AdminConfigManage = "admin:config.manage";
@@ -161,6 +183,10 @@ namespace Domain.Constants
             new PermissionDefinition(DivisionPlan, "Divisions", "Plan division goals, contributions and KPIs"),
             new PermissionDefinition(DivisionActualsEnter, "Divisions", "Enter division actual performance values"),
             new PermissionDefinition(DivisionReportsView, "Divisions", "View division performance reports"),
+
+            new PermissionDefinition(DivisionScorecardView, "Division Access", "View the employee's own division scorecard"),
+            new PermissionDefinition(DivisionPerformanceView, "Division Access", "View the employee's own division performance"),
+            new PermissionDefinition(DivisionInitiativeView, "Division Access", "View initiatives owned by the employee or their division"),
 
             new PermissionDefinition(AdminUsersManage, "Admin", "Manage users"),
             new PermissionDefinition(AdminRolesManage, "Admin", "Manage roles and permissions"),

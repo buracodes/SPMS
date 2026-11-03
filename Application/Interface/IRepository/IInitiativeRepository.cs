@@ -18,8 +18,13 @@ public interface IInitiativeRepository : IGenericRepository<Initiative>
     /// <summary>All initiatives with their milestones loaded, for progress and milestone reporting.</summary>
     Task<IReadOnlyList<Initiative>> GetAllWithMilestonesAsync();
 
-    /// <summary>Initiatives owned by the given user, with their milestones loaded.</summary>
-    Task<IReadOnlyList<Initiative>> GetByOwnerIdWithMilestonesAsync(Guid ownerId);
+    /// <summary>
+    /// Initiatives owned by the given user, or by any of the authorized divisions when any are
+    /// supplied, with their milestones loaded.
+    /// </summary>
+    Task<IReadOnlyList<Initiative>> GetByOwnerIdWithMilestonesAsync(
+        Guid ownerId,
+        IReadOnlyList<Guid>? divisionIds = null);
 
     Task<IReadOnlyList<Initiative>> GetByStatusAsync(InitiativeStatus status);
 
@@ -52,6 +57,16 @@ public sealed record InitiativeListQuery
 
     public Guid? OwnerId { get; init; }
 
+    public Guid? DivisionOwnerId { get; init; }
+
+    /// <summary>
+    /// Authorization scope for a division account: results are limited to initiatives owned by
+    /// this user or by one of the authorized divisions. Empty for corporate principals.
+    /// </summary>
+    public IReadOnlyList<Guid> ScopeDivisionIds { get; init; } = Array.Empty<Guid>();
+
+    public Guid? ScopeOwnerId { get; init; }
+
     public bool IncludeClosed { get; init; } = true;
 
     public int Page { get; init; } = 1;
@@ -67,8 +82,10 @@ public sealed record InitiativeListRow(
     string Name,
     InitiativeStatus Status,
     InitiativePriority Priority,
-    Guid OwnerId,
+    Guid? OwnerId,
     string? OwnerName,
+    Guid? DivisionOwnerId,
+    string? DivisionOwnerName,
     Guid? GoalId,
     Guid? KraId,
     Guid? KpiId,

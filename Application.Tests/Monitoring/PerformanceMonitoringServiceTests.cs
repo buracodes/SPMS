@@ -112,6 +112,23 @@ public class PerformanceMonitoringServiceTests
         return division;
     }
 
+    private static async Task<DivisionPlan> SeedPlanAsync(
+        TestDbContextLease lease,
+        Guid divisionId,
+        Guid scorecardId)
+    {
+        var plan = new DivisionPlan
+        {
+            Id = Guid.NewGuid(),
+            DivisionId = divisionId,
+            ScorecardId = scorecardId,
+            PlanStatus = DivisionPlanStatus.Draft
+        };
+        lease.Context.DivisionPlans.Add(plan);
+        await lease.Context.SaveChangesAsync();
+        return plan;
+    }
+
     private static async Task<User> SeedUserAsync(TestDbContextLease lease, string fullName)
     {
         var user = new User
@@ -308,6 +325,56 @@ public class PerformanceMonitoringServiceTests
         {
             FiscalYearId = year.Id,
             ScorecardId = divisionScorecard.Id
+        }));
+    }
+
+    [Fact]
+    public async Task Division_principal_defaults_to_its_own_plan_scorecard()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, 2026);
+        await SeedScorecardAsync(lease, year.Id, name: "First Corporate");
+        var planned = await SeedScorecardAsync(lease, year.Id, name: "Division Plan Scorecard");
+        var division = await SeedDivisionAsync(lease, "OPS");
+        await SeedPlanAsync(lease, division.Id, planned.Id);
+
+        var scope = new TestOrganizationalScopeService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = division.Id,
+            HasCorporateAccess = false
+        };
+        var service = CreateService(lease, scope);
+
+        var result = await service.GetAsync(new PerformanceMonitoringFilter());
+
+        Assert.Equal(PerformanceScope.Division, result.Scope);
+        Assert.Equal(division.Id, result.DivisionId);
+        Assert.Equal(planned.Id, result.ScorecardId);
+    }
+
+    [Fact]
+    public async Task Division_principal_requesting_a_scorecard_outside_its_plans_is_forbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, 2026);
+        var unplanned = await SeedScorecardAsync(lease, year.Id, name: "Other Corporate");
+        var planned = await SeedScorecardAsync(lease, year.Id, name: "Division Plan Scorecard");
+        var division = await SeedDivisionAsync(lease, "OPS");
+        await SeedPlanAsync(lease, division.Id, planned.Id);
+
+        var scope = new TestOrganizationalScopeService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = division.Id,
+            HasCorporateAccess = false
+        };
+        var service = CreateService(lease, scope);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => service.GetAsync(new PerformanceMonitoringFilter
+        {
+            FiscalYearId = year.Id,
+            ScorecardId = unplanned.Id
         }));
     }
 

@@ -402,12 +402,13 @@ public sealed class ReportingService : IReportingService
 
         var divisions = await ResolveDivisionsAsync(filter, scorecard.Id, ct);
 
-        // FR-908: a principal without portfolio visibility only ever sees its own division,
-        // even if the request omits the division filter.
+        // FR-908: a principal without portfolio visibility only ever sees its authorized
+        // divisions, even if the request omits the division filter.
         if (!await organizationalScope.HasDivisionPortfolioAccessAsync(ct))
         {
-            divisions = organizationalScope.DivisionId is { } ownDivisionId
-                ? divisions.Where(d => d.Id == ownDivisionId).ToList()
+            var divisionIds = organizationalScope.DivisionIds;
+            divisions = divisionIds.Count > 0
+                ? divisions.Where(d => divisionIds.Contains(d.Id)).ToList()
                 : Array.Empty<Division>();
         }
 
@@ -480,6 +481,7 @@ var projects = initiativeRepository.GetQueryable()
                 i.ActualExpenditure,
                 i.IsClosed,
                 i.OwnerId,
+                i.DivisionOwnerId,
                 i.GoalId,
                 i.KraId,
                 i.KpiId
@@ -493,13 +495,21 @@ var projects = initiativeRepository.GetQueryable()
             : await initiativeRepository.GetProgressInputsAsync(
                 projects.Select(p => p.Id).ToList(), ct);
 
-        var userIds = projects.Select(p => p.OwnerId).Distinct().ToList();
+        var userIds = projects.Select(p => p.OwnerId).Where(id => id.HasValue).Select(id => id!.Value).Distinct().ToList();
         var users = userIds.Count == 0
             ? new Dictionary<Guid, string>()
             : userRepository.GetQueryable()
                 .Where(u => userIds.Contains(u.Id))
                 .Select(u => new { u.Id, u.FullName })
                 .ToDictionary(u => u.Id, u => u.FullName);
+
+        var divisionOwnerIds = projects.Select(p => p.DivisionOwnerId).Where(id => id.HasValue).Select(id => id!.Value).Distinct().ToList();
+        var divisionOwners = divisionOwnerIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : divisionRepository.GetQueryable()
+                .Where(d => divisionOwnerIds.Contains(d.Id))
+                .Select(d => new { d.Id, d.Name })
+                .ToDictionary(d => d.Id, d => d.Name);
 
         var goalNameById = goalNamesById(projects.Select(p => p.GoalId).ToList());
         var kraNameById = kraNamesById(projects.Select(p => p.KraId).Where(id => id is not null).Select(id => id!.Value).ToList());
@@ -541,7 +551,7 @@ var progressResult = initiativeProgressCalculator.Calculate(
                 project.KpiId is { } kpiId && kpiNameById.TryGetValue(kpiId, out var kp) ? kp : null,
                 progress is null ? null : FormatNum(progress.Value),
                 project.Budget == 0 ? null : FormatNum(project.Budget),
-                users.TryGetValue(project.OwnerId, out var owner) ? owner : null,
+                OwnerLabel(project.OwnerId, project.DivisionOwnerId, users, divisionOwners),
                 project.StartDate.ToString("yyyy-MM-dd"),
                 project.EndDate.ToString("yyyy-MM-dd")
             });
@@ -551,6 +561,26 @@ var progressResult = initiativeProgressCalculator.Calculate(
         envelope.Summary.Add("Not started", statusCounts[(int)InitiativeStatus.NotStarted].ToString());
         envelope.Summary.Add("In progress", statusCounts[(int)InitiativeStatus.InProgress].ToString());
         envelope.Summary.Add("Completed", statusCounts[(int)InitiativeStatus.Completed].ToString());
+    }
+
+    /// <summary>An initiative is owned by one user or one division; report whichever is assigned.</summary>
+    private static string? OwnerLabel(
+        Guid? ownerId,
+        Guid? divisionOwnerId,
+        IReadOnlyDictionary<Guid, string> users,
+        IReadOnlyDictionary<Guid, string> divisions)
+    {
+        if (ownerId is { } user && users.TryGetValue(user, out var name))
+        {
+            return name;
+        }
+
+        if (divisionOwnerId is { } division && divisions.TryGetValue(division, out var divisionName))
+        {
+            return divisionName;
+        }
+
+        return null;
     }
 
     // ─────────────────────────── Exporters ───────────────────────────

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,8 +19,17 @@ namespace Application.Interface.IService;
 /// </summary>
 public interface IOrganizationalScopeService
 {
+    /// <summary>The authenticated user id, when present.</summary>
+    Guid? UserId { get; }
+
     /// <summary>The division the principal currently belongs to, resolved from current state.</summary>
     Guid? DivisionId { get; }
+
+    /// <summary>
+    /// Every division in the principal's live scope: the HR primary division first, followed
+    /// by explicitly authorized divisions. Empty for a corporate principal.
+    /// </summary>
+    IReadOnlyList<Guid> DivisionIds { get; }
 
     /// <summary>True when the principal effectively holds corporate-wide visibility.</summary>
     Task<bool> HasCorporateAccessAsync(CancellationToken cancellationToken = default);
@@ -41,4 +51,20 @@ public interface IOrganizationalScopeService
 
     /// <summary>True when the principal owns the KPI directly or through its division.</summary>
     Task<bool> IsAssignedKpiAsync(Guid? ownerId, Guid? divisionOwnerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// True when a corporate principal holds the live <c>initiatives:view</c> right. A
+    /// division-scoped principal is always limited to its own/its division's initiatives, so
+    /// this is false for division accounts even when a group grants the right.
+    /// </summary>
+    Task<bool> CanAccessInitiativePortfolioAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// True when the principal may read the given initiative: its owner, its division owner,
+    /// or a corporate principal. A division-scoped principal is never widened by a group grant.
+    /// </summary>
+    Task<bool> CanAccessInitiativeAsync(Guid? ownerId, Guid? divisionOwnerId, CancellationToken cancellationToken = default);
+
+    /// <summary>Throws <see cref="Exceptions.ForbiddenException"/> when the initiative is out of scope.</summary>
+    Task EnsureInitiativeAsync(Guid? ownerId, Guid? divisionOwnerId, CancellationToken cancellationToken = default);
 }

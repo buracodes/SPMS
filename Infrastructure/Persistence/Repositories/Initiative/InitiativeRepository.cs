@@ -34,6 +34,7 @@ public class InitiativeRepository : GenericRepository<Initiative>, IInitiativeRe
             .AsNoTracking()
             .Include(i => i.Milestones)
             .Include(i => i.Owner)
+            .Include(i => i.DivisionOwner)
             .Include(i => i.Goal)
             .Include(i => i.Kra)
             .Include(i => i.Kpi)
@@ -57,11 +58,18 @@ public class InitiativeRepository : GenericRepository<Initiative>, IInitiativeRe
             .ToListAsync();
     }
 
-    public async Task<IReadOnlyList<Initiative>> GetByOwnerIdWithMilestonesAsync(Guid ownerId)
+    public async Task<IReadOnlyList<Initiative>> GetByOwnerIdWithMilestonesAsync(
+        Guid ownerId,
+        IReadOnlyList<Guid>? divisionIds = null)
     {
+        var scopedDivisionIds = divisionIds ?? Array.Empty<Guid>();
+
         return await context.Initiatives
             .Include(i => i.Milestones)
-            .Where(i => i.OwnerId == ownerId)
+            .Where(i => i.OwnerId == ownerId
+                || (scopedDivisionIds.Count > 0
+                    && i.DivisionOwnerId.HasValue
+                    && scopedDivisionIds.Contains(i.DivisionOwnerId.Value)))
             .OrderByDescending(i => i.CreatedDate)
             .ToListAsync();
     }
@@ -114,6 +122,30 @@ public class InitiativeRepository : GenericRepository<Initiative>, IInitiativeRe
             initiatives = initiatives.Where(i => i.OwnerId == query.OwnerId.Value);
         }
 
+        if (query.DivisionOwnerId.HasValue)
+        {
+            initiatives = initiatives.Where(i => i.DivisionOwnerId == query.DivisionOwnerId.Value);
+        }
+
+        // The authorization scope is applied after the caller's own filters, so a division
+        // account asking for another division's initiatives simply receives no rows.
+        if (query.ScopeDivisionIds.Count > 0)
+        {
+            var scopedDivisionIds = query.ScopeDivisionIds;
+            if (query.ScopeOwnerId.HasValue)
+            {
+                var scopedOwnerId = query.ScopeOwnerId.Value;
+                initiatives = initiatives.Where(i =>
+                    (i.DivisionOwnerId.HasValue && scopedDivisionIds.Contains(i.DivisionOwnerId.Value))
+                    || i.OwnerId == scopedOwnerId);
+            }
+            else
+            {
+                initiatives = initiatives.Where(i =>
+                    i.DivisionOwnerId.HasValue && scopedDivisionIds.Contains(i.DivisionOwnerId.Value));
+            }
+        }
+
         var total = await initiatives.CountAsync(cancellationToken);
 
         if (query.Paged)
@@ -159,6 +191,8 @@ public class InitiativeRepository : GenericRepository<Initiative>, IInitiativeRe
                 i.Priority,
                 i.OwnerId,
                 OwnerName = i.Owner != null ? i.Owner.FullName : null,
+                i.DivisionOwnerId,
+                DivisionOwnerName = i.DivisionOwner != null ? i.DivisionOwner.Name : null,
                 i.GoalId,
                 i.KraId,
                 i.KpiId,
@@ -181,6 +215,8 @@ public class InitiativeRepository : GenericRepository<Initiative>, IInitiativeRe
                     r.Priority,
                     r.OwnerId,
                     r.OwnerName,
+                    r.DivisionOwnerId,
+                    r.DivisionOwnerName,
                     r.GoalId,
                     r.KraId,
                     r.KpiId,

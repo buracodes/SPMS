@@ -133,6 +133,14 @@ public sealed class WidgetSeriesDto
     public string Name { get; set; } = string.Empty;
     public string Kind { get; set; } = "line";
     public string? Color { get; set; }
+
+    /// <summary>
+    /// True when each point takes its colour from the widget's category colours instead of
+    /// the series colour. Used for the actual series of target vs actual so every bar carries
+    /// the same configured RAG band as the KPI it represents.
+    /// </summary>
+    public bool UseCategoryColors { get; set; }
+
     public IReadOnlyList<decimal?> Values { get; set; } = Array.Empty<decimal?>();
 }
 
@@ -175,8 +183,8 @@ public sealed class BarChartWidgetDto
     public decimal? AxisMax { get; set; }
 
     /// <summary>
-    /// Per category bar colour for a single series chart (RAG banding on scores).
-    /// Ignored when more than one series is present.
+    /// Per category bar colour (RAG banding). Applied to a single series chart, and to any
+    /// series that opts in through <see cref="WidgetSeriesDto.UseCategoryColors"/>.
     /// </summary>
     public IReadOnlyList<string> CategoryColors { get; set; } = Array.Empty<string>();
 
@@ -267,6 +275,10 @@ public sealed class DashboardWidgetBundleDto
     public GaugeWidgetDto? OverallScore { get; set; }
     public RagDistributionWidgetDto? RagDistribution { get; set; }
     public TrendWidgetDto? PerformanceTrend { get; set; }
+
+    /// <summary>Per-KPI month-by-month scores for the most material KPIs in scope.</summary>
+    public TrendWidgetDto? KpiPerformanceTrend { get; set; }
+
     public TableWidgetDto? ScorecardPerformance { get; set; }
     public TableWidgetDto? ScorecardHealth { get; set; }
     public TableWidgetDto? GoalHealth { get; set; }
@@ -331,4 +343,13 @@ public sealed class GoalDrilldownDto
     public string? RagLabel { get; set; }
     public decimal? Trend { get; set; }
     public IReadOnlyList<GoalKraDto> Kras { get; set; } = Array.Empty<GoalKraDto>();
+
+    /// <summary>
+    /// True for a division goal, whose hierarchy is Division Goal -> KPI with no corporate
+    /// KRA layer. The KPI list then carries the drill-down detail directly.
+    /// </summary>
+    public bool IsDivisionGoal { get; set; }
+
+    /// <summary>Direct KPIs for a division goal; empty for a corporate goal.</summary>
+    public IReadOnlyList<GoalKraKpiDto> Kpis { get; set; } = Array.Empty<GoalKraKpiDto>();
 }

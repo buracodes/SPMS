@@ -16,15 +16,18 @@ namespace Application.CQRS.Auth.Handlers.Queries
         private readonly ICurrentUserService currentUserService;
         private readonly IUserRepository userRepository;
         private readonly IEffectivePermissionService effectivePermissionService;
+        private readonly IEmployeeAccessResolver employeeAccess;
 
         public GetCurrentUserQueryHandler(
             ICurrentUserService _currentUserService,
             IUserRepository _userRepository,
-            IEffectivePermissionService _effectivePermissionService)
+            IEffectivePermissionService _effectivePermissionService,
+            IEmployeeAccessResolver _employeeAccess)
         {
             currentUserService = _currentUserService;
             userRepository = _userRepository;
             effectivePermissionService = _effectivePermissionService;
+            employeeAccess = _employeeAccess;
         }
 
         public async Task<Response<AuthUserDto>> Handle(GetCurrentUserQueryRequest request, CancellationToken cancellationToken)
@@ -51,6 +54,9 @@ namespace Application.CQRS.Auth.Handlers.Queries
             // position grants must be reflected here exactly as they are at login.
             var effectivePermissions = await effectivePermissionService.GetEffectiveGrantNamesAsync(user.Id, cancellationToken);
             var permissions = effectivePermissions.ToList();
+            var accessSnapshot = await employeeAccess.ResolveAsync(user.Id, cancellationToken);
+            var divisionId = accessSnapshot.DivisionId;
+            var divisionIds = accessSnapshot.ScopedDivisionIds;
 
             return new Response<AuthUserDto>
             {
@@ -62,7 +68,8 @@ namespace Application.CQRS.Auth.Handlers.Queries
                     Username = user.Username,
                     FullName = user.FullName,
                     Email = user.Email,
-                    DivisionId = user.DivisionId,
+                    DivisionId = divisionId,
+                    DivisionIds = divisionIds,
                     Roles = roles,
                     Permissions = permissions
                 }

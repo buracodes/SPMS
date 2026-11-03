@@ -13,7 +13,13 @@ namespace Application.CQRS.Initiative.Requests.Commands
 
         public string? Description { get; set; }
 
+        /// <summary>
+        /// Setting OwnerId transfers ownership to that individual and clears a division owner.
+        /// Setting DivisionOwnerId does the opposite. Omitting both leaves ownership untouched.
+        /// </summary>
         public Guid? OwnerId { get; set; }
+
+        public Guid? DivisionOwnerId { get; set; }
 
         /// <summary>Set explicitly to change the link; omitted leaves the current link untouched.</summary>
         public Guid? GoalId { get; set; }

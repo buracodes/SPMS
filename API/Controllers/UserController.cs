@@ -51,17 +51,21 @@ public class UserController : ControllerBase
     /// Active employees available as KPI owners, sourced from HR so an employee can own a KPI
     /// before their first SPMS sign-in. EmpId is the AD objectGUID and therefore the stable local
     /// user id. Deliberately readable with only kpi:view so planners who cannot administer users
-    /// can still pick an owner.
+    /// can still pick an owner. Search matches the employee name, HR id code and email on the
+    /// HR side; the picker never loads the whole HR directory.
     /// </summary>
     [HttpGet("lookup")]
     [Authorize(Policy = Permissions.KpiView)]
     public async Task<ActionResult<Response<List<UserDto>>>> Lookup(
         [FromQuery] string? search,
+        [FromQuery] int? take,
         CancellationToken cancellationToken)
     {
-        var employees = await hrInfoRepository.GetActiveEmployeesAsync(search, 1000, cancellationToken);
+        var employees = await hrInfoRepository.GetActiveEmployeesAsync(search, Math.Clamp(take ?? 50, 1, 200), cancellationToken);
         var dtos = employees
             .Where(employee => employee.EmpId.HasValue)
+            .GroupBy(employee => employee.EmpId!.Value)
+            .Select(group => group.First())
             .Select(employee => new UserDto
             {
                 Id = employee.EmpId!.Value,
@@ -71,6 +75,9 @@ public class UserController : ControllerBase
                 IsActive = true,
                 DivisionId = employee.DivisionId,
                 DivisionName = employee.DivisionName,
+                EmployeeCode = employee.IdCode,
+                PositionName = employee.PositionName,
+                PositionLevel = employee.PositionLevel,
                 Roles = new List<string>()
             })
             .ToList();

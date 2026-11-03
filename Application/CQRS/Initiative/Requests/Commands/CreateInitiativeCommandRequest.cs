@@ -17,7 +17,10 @@ namespace Application.CQRS.Initiative.Requests.Commands
 
         public Guid? KpiId { get; set; }
 
-        public Guid OwnerId { get; set; }
+        /// <summary>Exactly one owner: an individual user (OwnerId) or a division (DivisionOwnerId).</summary>
+        public Guid? OwnerId { get; set; }
+
+        public Guid? DivisionOwnerId { get; set; }
 
         public InitiativePriority Priority { get; set; } = InitiativePriority.Medium;
 

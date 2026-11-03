@@ -17,20 +17,24 @@ namespace Application.Tests.Kpis;
 
 public class KpiIntegrityRuleTests
 {
-    private static (FiscalYear Year, Scorecard Scorecard, Goal Goal, Kra Kra) SeedHierarchy(TestDbContextLease lease)
+    private static readonly Guid DefaultDivisionOwnerId = Guid.Parse("0d1b6b7e-4c8f-4b1c-9f0a-3d7f7a3f2b11");
+
+    private static (FiscalYear Year, Scorecard Scorecard, Goal Goal, Kra Kra, Division Division) SeedHierarchy(TestDbContextLease lease)
     {
         var year = new FiscalYear { Id = Guid.NewGuid(), Label = "FY2026", StartDate = new DateTime(2026, 7, 1), EndDate = new DateTime(2027, 6, 30) };
         var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "Corporate 2026", Scope = ScorecardScope.Corporate };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Win mandates", Weight = 100 };
+        var division = new Division { Id = DefaultDivisionOwnerId, Name = "Trading", Code = "TRD" };
 
         lease.Context.FiscalYears.Add(year);
         lease.Context.Scorecards.Add(scorecard);
         lease.Context.Goals.Add(goal);
         lease.Context.Kras.Add(kra);
+        lease.Context.Divisions.Add(division);
         lease.Context.SaveChanges();
 
-        return (year, scorecard, goal, kra);
+        return (year, scorecard, goal, kra, division);
     }
 
     private static CreateKpiCommandHandler CreateHandler(TestDbContextLease lease, IKpiRepository? kpiRepository = null)
@@ -46,6 +50,7 @@ public class KpiIntegrityRuleTests
         {
             ScorecardId = scorecardId,
             KraId = kraId,
+            DivisionOwnerId = DefaultDivisionOwnerId,
             Name = name,
             Weight = weight,
             DataSource = KpiDataSource.Manual,

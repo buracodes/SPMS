@@ -92,7 +92,7 @@ public class AdUserProvisioningTests : IAsyncDisposable
 
     private async Task<IReadOnlySet<string>> EffectiveGrantsAsync(Guid userId)
     {
-        var service = new EffectivePermissionService(lease.Context, new NoPositionGrants());
+        var service = new EffectivePermissionService(lease.Context, new NoPositionGrants(), new TestEmployeeAccessResolver());
         return await service.GetEffectiveGrantNamesAsync(userId);
     }
 

@@ -8,7 +8,13 @@ public class CreateInitiativeValidator : AbstractValidator<CreateInitiativeComma
     public CreateInitiativeValidator()
     {
         RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.OwnerId).NotEqual(Guid.Empty);
+        RuleFor(x => x.OwnerId).NotEqual(Guid.Empty).When(x => x.OwnerId.HasValue);
+        RuleFor(x => x.DivisionOwnerId).NotEqual(Guid.Empty).When(x => x.DivisionOwnerId.HasValue);
+
+        RuleFor(x => x)
+            .Must(x => x.OwnerId.HasValue ^ x.DivisionOwnerId.HasValue)
+            .WithMessage("An initiative must be owned by exactly one owner: an individual user or a division.");
+
         RuleFor(x => x.Priority).IsInEnum();
         RuleFor(x => x.Status).IsInEnum();
 

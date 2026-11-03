@@ -47,7 +47,7 @@ public sealed partial class RoleDashboardService
         var actualByUnit = new List<decimal?>();
         var colorByUnit = new List<string>();
 
-        var rows = new List<(string Unit, decimal Target, decimal? Actual)>();
+        var rows = new List<(string Unit, decimal Target, decimal? Actual, decimal? Score)>();
 
         foreach (var kpi in load.Kpis)
         {
@@ -58,7 +58,7 @@ public sealed partial class RoleDashboardService
             }
 
             var unit = string.IsNullOrWhiteSpace(kpi.Unit) ? "No unit" : kpi.Unit.Trim();
-            rows.Add((unit, period.PeriodTarget.Value, period.PeriodActual));
+            rows.Add((unit, period.PeriodTarget.Value, period.PeriodActual, period.PeriodScore));
         }
 
         foreach (var group in rows
@@ -74,15 +74,17 @@ public sealed partial class RoleDashboardService
             var withActual = group.Where(r => r.Actual.HasValue).ToList();
             actualByUnit.Add(withActual.Count == 0 ? null : Math.Round(withActual.Sum(r => r.Actual!.Value), 2));
 
-            // Green when the unit cleared its target, amber when some actuals are missing.
-            colorByUnit.Add(
-                withActual.Count == 0
-                    ? "slate"
-                    : withActual.Sum(r => r.Actual!.Value) >= group.Sum(r => r.Target)
-                        ? "Green"
-                        : withActual.Count < group.Count()
-                            ? "Amber"
-                            : "Red");
+            // Colour the actual bar with the configured RAG band of the least healthy KPI in
+            // the unit. A KPI with no data is never counted Red; it only contributes NoData.
+            var band = group.Any(r => load.RagIsRed(r.Score))
+                ? DashboardRag.Red
+                : group.Any(r => load.Rag(r.Score) == DashboardRag.Amber)
+                    ? DashboardRag.Amber
+                    : group.Any(r => load.Rag(r.Score) == DashboardRag.Green)
+                        ? DashboardRag.Green
+                        : DashboardRag.NoData;
+
+            colorByUnit.Add(band);
         }
 
         var targetCount = rows.Count;
@@ -95,12 +97,20 @@ public sealed partial class RoleDashboardService
             Title = "Target vs actual",
             Description =
                 $"Configured targets against entered actuals for the same {ScopeText(load).ToLowerInvariant()} period. " +
+                "Actual bars carry the configured RAG band of the least healthy KPI in each unit; " +
                 "KPIs are grouped by unit because different units cannot be added together.",
             Categories = units,
             Series = new[]
             {
                 new WidgetSeriesDto { Name = "Target", Kind = "bar", Color = "slate", Values = targetByUnit.Cast<decimal?>().ToList() },
-                new WidgetSeriesDto { Name = "Actual", Kind = "bar", Color = "accent", Values = actualByUnit }
+                new WidgetSeriesDto
+                {
+                    Name = "Actual",
+                    Kind = "bar",
+                    Color = "accent",
+                    UseCategoryColors = true,
+                    Values = actualByUnit
+                }
             },
             Orientation = "horizontal",
             ValueFormat = "number",
@@ -119,16 +129,32 @@ public sealed partial class RoleDashboardService
     }
 
     /// <summary>Goals ranked by weighted achievement, coloured by the same RAG bands used elsewhere.</summary>
-    private static BarChartWidgetDto BuildGoalPerformanceChart(DashboardLoad load)
+    private BarChartWidgetDto BuildGoalPerformanceChart(DashboardLoad load)
     {
-        var ranked = load.Goals
-            .Select(goal => (Goal: goal, Score: GoalScore(load, goal.Id)))
-            .OrderByDescending(x => x.Score ?? decimal.MinValue)
-            .ThenBy(x => x.Goal.Name, StringComparer.Ordinal)
-            .ToList();
+        var scorecardId = load.SelectedScorecard?.Id;
+        var divisionId = load.SelectedDivisionId;
+
+        var ranked = load.IsDivisionScoped
+            ? load.DivisionGoals
+                .Select(goal => (Name: goal.Name, Id: goal.Id, Score: GoalScore(load, goal.Id)))
+                .OrderByDescending(x => x.Score ?? decimal.MinValue)
+                .ThenBy(x => x.Name, StringComparer.Ordinal)
+                .ToList()
+            : load.Goals
+                .Select(goal => (Name: goal.Name, Id: goal.Id, Score: GoalScore(load, goal.Id)))
+                .OrderByDescending(x => x.Score ?? decimal.MinValue)
+                .ThenBy(x => x.Name, StringComparer.Ordinal)
+                .ToList();
 
         var shown = ranked.Take(MaxChartCategories).ToList();
-        var scorecardId = load.SelectedScorecard?.Id;
+
+        var routes = scorecardId is null
+            ? Array.Empty<string?>()
+            : load.IsDivisionScoped
+                ? shown.Select(_ => (string?)(divisionId is null
+                    ? $"/division-planning/{scorecardId}"
+                    : $"/division-planning/{scorecardId}?divisionId={divisionId}")).ToArray()
+                : shown.Select(x => (string?)$"/scorecards/{scorecardId}?goalId={x.Id}").ToArray();
 
         return new BarChartWidgetDto
         {
@@ -136,7 +162,7 @@ public sealed partial class RoleDashboardService
             Description = ranked.Count > shown.Count
                 ? $"Top {shown.Count} of {ranked.Count} goals by weighted achievement for the selected period."
                 : "Every goal ranked by weighted achievement for the selected period.",
-            Categories = shown.Select(x => x.Goal.Name).ToList(),
+            Categories = shown.Select(x => x.Name).ToList(),
             Series = new[]
             {
                 new WidgetSeriesDto
@@ -153,10 +179,10 @@ public sealed partial class RoleDashboardService
             AxisMin = 0m,
             AxisMax = 100m,
             CategoryColors = shown.Select(x => load.Rag(x.Score)).ToList(),
-            Routes = scorecardId is null
-                ? new string?[] { }
-                : shown.Select(x => $"/scorecards/{scorecardId}?goalId={x.Goal.Id}").ToArray(),
-            EmptyMessage = "No goals match the selected filters."
+            Routes = routes,
+            EmptyMessage = load.IsDivisionScoped
+                ? "No goals are configured for your division plan."
+                : "No goals match the selected filters."
         };
     }
 
@@ -229,7 +255,9 @@ public sealed partial class RoleDashboardService
             Title = "Initiative delivery",
             Description = shown.Count < active.Count
                 ? $"Milestone delivery for the {shown.Count} highest budget active initiatives out of {active.Count}."
-                : "Weighted milestone delivery for every active initiative.",
+                : load.IsDivisionScoped
+                    ? "Weighted milestone delivery for your division's active initiatives."
+                    : "Weighted milestone delivery for every active initiative.",
             Categories = shown.Select(i => i.Name).ToList(),
             Series = new[]
             {
@@ -248,9 +276,12 @@ public sealed partial class RoleDashboardService
             AxisMax = 100m,
             CategoryColors = shown.Select(i => load.Rag(InitiativeProgress(i))).ToList(),
             Routes = shown.Select(i => $"/initiatives/{i.Id}").ToList(),
-            EmptyMessage = load.Profile.DataScope == DashboardDataScope.AssignedOnly
-                ? "You do not own any active initiatives."
-                : "No active initiatives with milestones to track."
+            EmptyMessage = load.Profile.DataScope switch
+            {
+                DashboardDataScope.AssignedOnly => "You do not own any active initiatives.",
+                DashboardDataScope.Division => "Your division has no active initiatives with milestones to track.",
+                _ => "No active initiatives with milestones to track."
+            }
         };
     }
 

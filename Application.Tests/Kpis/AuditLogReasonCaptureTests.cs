@@ -121,7 +121,8 @@ public class AuditLogReasonCaptureTests
             new KpiActualValueRepository(lease.Context),
             new TestCurrentUserService { UserId = SeededAdminUserId, UserName = "admin" },
             new TestSpmsJobScheduler(),
-            auditContext);
+            auditContext,
+            new TestEffectivePermissionService());
     }
 
     private static async Task<(Guid KpiId, Guid PeriodId)> SeedAsync(TestDbContextLease lease)

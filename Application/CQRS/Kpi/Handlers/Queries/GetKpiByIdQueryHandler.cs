@@ -2,6 +2,7 @@ using Application.CQRS.Kpi.Requests.Queries;
 using Application.DTOS.Kpi;
 using Application.Exceptions;
 using Application.Interface.IRepository;
+using Application.Interface.IService;
 using Application.Responses;
 using MediatR;
 using KpiEntity = Domain.Entities.Kpi;
@@ -11,16 +12,25 @@ namespace Application.CQRS.Kpi.Handlers.Queries;
 public class GetKpiByIdQueryHandler : IRequestHandler<GetKpiByIdQueryRequest, Response<KpiDto>>
 {
     private readonly IKpiRepository kpiRepository;
+    private readonly IOrganizationalScopeService organizationalScope;
 
-    public GetKpiByIdQueryHandler(IKpiRepository _kpiRepository)
+    public GetKpiByIdQueryHandler(
+        IKpiRepository _kpiRepository,
+        IOrganizationalScopeService _organizationalScope)
     {
         kpiRepository = _kpiRepository;
+        organizationalScope = _organizationalScope;
     }
 
     public async Task<Response<KpiDto>> Handle(GetKpiByIdQueryRequest request, CancellationToken cancellationToken)
     {
         var kpi = await kpiRepository.GetByIdWithScorecardAsync(request.Id)
             ?? throw new NotFoundException(nameof(KpiEntity), request.Id);
+
+        if (!await organizationalScope.IsAssignedKpiAsync(kpi.OwnerId, kpi.DivisionOwnerId, cancellationToken))
+        {
+            throw new ForbiddenException("You do not have access to this KPI.");
+        }
 
         var childKpiCount = kpiRepository.GetQueryable().Count(k => k.ParentKpiId == kpi.Id);
 

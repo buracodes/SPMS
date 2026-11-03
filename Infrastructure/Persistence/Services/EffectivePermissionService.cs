@@ -1,5 +1,6 @@
 using Application.CQRS.AccessControl;
 using Application.Interface.IService;
+using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
 using Infrastructure.Persistence.Context;
@@ -27,7 +28,12 @@ namespace Infrastructure.Persistence.Services;
 ///   4. direct user-level grant                           → grant (direct assignment)
 ///   5. group-level grant                                 → grant (group assignment)
 ///   6. optional HR position-level grant                  → grant (position assignment)
-///   7. no applicable grant                               → default deny
+///   7. system baseline for an active HR employee         → grant (baseline)
+///   8. no applicable grant                               → default deny
+///
+/// The baseline sits below every explicit deny and every explicit grant, so a group or user
+/// deny removes it and any granted right keeps its own provenance. Baseline grants are still
+/// only read rights; organizational scope is enforced separately by the resource handlers.
 /// </summary>
 public class EffectivePermissionService : IEffectivePermissionService
 {
@@ -37,11 +43,16 @@ public class EffectivePermissionService : IEffectivePermissionService
 
     private readonly SpmsDbContext context;
     private readonly IPositionPermissionProvider positionPermissions;
+    private readonly IEmployeeAccessResolver employeeAccess;
 
-    public EffectivePermissionService(SpmsDbContext context, IPositionPermissionProvider positionPermissions)
+    public EffectivePermissionService(
+        SpmsDbContext context,
+        IPositionPermissionProvider positionPermissions,
+        IEmployeeAccessResolver employeeAccess)
     {
         this.context = context;
         this.positionPermissions = positionPermissions;
+        this.employeeAccess = employeeAccess;
     }
 
     public void InvalidateAllAsync()
@@ -66,16 +77,32 @@ public class EffectivePermissionService : IEffectivePermissionService
         }
 
         var positionGrants = await positionPermissions.GetGrantedPermissionsAsync(state.User!.Id, cancellationToken);
+        var baselineGrants = await GetBaselineGrantsAsync(state.User!.Id, cancellationToken);
         var knownNames = CollectPermissionNames(state);
         knownNames.UnionWith(positionGrants);
+        knownNames.UnionWith(baselineGrants);
         return new HashSet<string>(
-            knownNames.Where(name => Evaluate(name, state, positionGrants)?.Result == AccessResult.Granted));
+            knownNames.Where(name => Evaluate(name, state, positionGrants, baselineGrants)?.Result == AccessResult.Granted));
     }
 
     public async Task<bool> HasPermissionAsync(Guid userId, string permission, CancellationToken cancellationToken = default)
     {
         var grants = await GetEffectiveGrantNamesAsync(userId, cancellationToken);
         return grants.Contains(permission);
+    }
+
+    public async Task<bool> HasAnyPermissionAsync(
+        Guid userId,
+        IReadOnlyCollection<string> permissions,
+        CancellationToken cancellationToken = default)
+    {
+        if (permissions == null || permissions.Count == 0)
+        {
+            return false;
+        }
+
+        var grants = await GetEffectiveGrantNamesAsync(userId, cancellationToken);
+        return permissions.Any(permission => grants.Contains(permission));
     }
 
     /// <summary>Builds the full explanation table for the Effective Access tab — one entry per catalog right.</summary>
@@ -98,6 +125,9 @@ public class EffectivePermissionService : IEffectivePermissionService
         var positionGrants = identityActive
             ? await positionPermissions.GetGrantedPermissionsAsync(state.User!.Id, cancellationToken)
             : (IReadOnlySet<string>)new HashSet<string>();
+        var baselineGrants = identityActive
+            ? await GetBaselineGrantsAsync(state.User!.Id, cancellationToken)
+            : (IReadOnlySet<string>)new HashSet<string>();
         var groupNames = state.Memberships
             .Select(m => m.Role?.Name)
             .Where(n => !string.IsNullOrWhiteSpace(n))
@@ -110,7 +140,7 @@ public class EffectivePermissionService : IEffectivePermissionService
         foreach (var permission in catalog)
         {
             entries.Add(identityActive
-                ? Describe(permission, Evaluate(permission.Name, state, positionGrants))
+                ? Describe(permission, Evaluate(permission.Name, state, positionGrants, baselineGrants))
                 : Describe(permission, null));
         }
 
@@ -171,7 +201,8 @@ public class EffectivePermissionService : IEffectivePermissionService
     private static Decision? Evaluate(
         string permissionName,
         AuthorizationState state,
-        IReadOnlySet<string> positionGrants)
+        IReadOnlySet<string> positionGrants,
+        IReadOnlySet<string> baselineGrants)
     {
         bool directDeny = false, groupDeny = false, directGrant = false, groupGrant = false;
 
@@ -249,7 +280,26 @@ public class EffectivePermissionService : IEffectivePermissionService
                 "Granted through the user's HR position level mapping.");
         }
 
+        if (baselineGrants.Contains(permissionName))
+        {
+            return new Decision(AccessResult.Granted, AccessSource.SystemBaseline, false,
+                "Granted by the system baseline for active HR employees; organizational scope still limits the data to the employee's own division.");
+        }
+
         return null; // default deny
+    }
+
+    /// <summary>
+    /// Baseline read rights come from HR status alone, never from an assignment row. A
+    /// non-HR identity, an HR outage, or an event that removes the active position therefore
+    /// loses the baseline on the next evaluation.
+    /// </summary>
+    private async Task<IReadOnlySet<string>> GetBaselineGrantsAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var access = await employeeAccess.ResolveAsync(userId, cancellationToken);
+        return access.IsActiveHrEmployee
+            ? Permissions.BaselinePermissions
+            : (IReadOnlySet<string>)new HashSet<string>();
     }
 
     private static EffectiveAccessEntryDto Describe(Permission permission, Decision? decision) => decision switch
@@ -267,6 +317,7 @@ public class EffectivePermissionService : IEffectivePermissionService
         AccessSource.DirectUserAssignment => "Direct User Assignment",
         AccessSource.GroupAssignment => "Group Assignment",
         AccessSource.PositionAssignment => "Position Assignment",
+        AccessSource.SystemBaseline => "System Baseline",
         _ => "Default Deny"
     };
 

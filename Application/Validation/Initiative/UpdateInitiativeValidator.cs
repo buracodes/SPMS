@@ -10,6 +10,12 @@ public class UpdateInitiativeValidator : AbstractValidator<UpdateInitiativeComma
         RuleFor(x => x.Id).NotEqual(Guid.Empty);
         RuleFor(x => x.Name).NotEmpty().MaximumLength(200).When(x => x.Name != null);
         RuleFor(x => x.OwnerId).NotEqual(Guid.Empty).When(x => x.OwnerId.HasValue);
+        RuleFor(x => x.DivisionOwnerId).NotEqual(Guid.Empty).When(x => x.DivisionOwnerId.HasValue);
+
+        RuleFor(x => x)
+            .Must(x => !(x.OwnerId.HasValue && x.DivisionOwnerId.HasValue))
+            .WithMessage("An initiative can be owned by an individual user or a division, not both.");
+
         RuleFor(x => x.Priority).IsInEnum().When(x => x.Priority.HasValue);
         RuleFor(x => x.Status).IsInEnum().When(x => x.Status.HasValue);
 

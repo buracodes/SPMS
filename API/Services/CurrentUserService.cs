@@ -25,17 +25,31 @@ namespace API.Services
         public string? UserName => httpContextAccessor.HttpContext?.User?.Identity?.Name;
 
         /// <summary>
-        /// Current division assignment. Tokens no longer carry it; <see cref="UserClaimsTransformation"/>
-        /// adds it from the database on every request so a transfer takes effect immediately.
+        /// Every division claim on the current identity. <see cref="UserClaimsTransformation"/>
+        /// adds the HR primary division first, then any explicitly authorized divisions, so the
+        /// first entry is the primary scope.
         /// </summary>
-        public Guid? DivisionId
+        public IReadOnlyList<Guid> DivisionIds
         {
             get
             {
-                var value = httpContextAccessor.HttpContext?.User?.FindFirstValue("division");
-                return Guid.TryParse(value, out var id) ? id : null;
+                var claims = httpContextAccessor.HttpContext?.User?
+                    .FindAll("division")
+                    .Select(c => Guid.TryParse(c.Value, out var id) ? id : Guid.Empty)
+                    .Where(id => id != Guid.Empty)
+                    .Distinct()
+                    .ToArray();
+
+                return claims ?? Array.Empty<Guid>();
             }
         }
+
+        /// <summary>
+        /// Current primary division assignment. Tokens no longer carry it;
+        /// <see cref="UserClaimsTransformation"/> adds it from live state on every request so a
+        /// transfer or a revoked scope takes effect immediately.
+        /// </summary>
+        public Guid? DivisionId => DivisionIds.Count > 0 ? DivisionIds[0] : null;
 
         public bool IsAuthenticated => httpContextAccessor.HttpContext?.User?.Identity?.IsAuthenticated ?? false;
 

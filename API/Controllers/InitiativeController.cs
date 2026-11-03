@@ -1,3 +1,4 @@
+using API.Authorization;
 using Application.CQRS.Initiative.Requests.Commands;
 using Application.CQRS.Initiative.Requests.Queries;
 using Application.DTOS.Initiative;
@@ -38,7 +39,7 @@ public class InitiativeController : ControllerBase
     /// backend-calculated progress and budget figures the grid displays.
     /// </summary>
     [HttpGet]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<PagedInitiativeDto>>> GetAll([FromQuery] GetAllInitiativeQuery query)
     {
         var result = await mediator.Send(query);
@@ -52,7 +53,7 @@ public class InitiativeController : ControllerBase
 
     /// <summary>Portfolio metrics for dashboards and reports.</summary>
     [HttpGet("summary")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeSummaryDto>>> GetSummary([FromQuery] GetInitiativeSummaryQuery query)
     {
         var result = await mediator.Send(query);
@@ -65,7 +66,7 @@ public class InitiativeController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> GetById(Guid id)
     {
         var result = await mediator.Send(new GetInitiativeByIdQueryRequest { Id = id });
@@ -74,7 +75,7 @@ public class InitiativeController : ControllerBase
 
     /// <summary>FR-403 progress/change history, newest first.</summary>
     [HttpGet("{id:guid}/history")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<List<InitiativeUpdateLogDto>>>> GetHistory(Guid id, [FromQuery] Guid? milestoneId)
     {
         var result = await mediator.Send(new GetInitiativeHistoryQueryRequest
@@ -147,7 +148,7 @@ public class InitiativeController : ControllerBase
     }
 
     [HttpGet("{initiativeId:guid}/milestones")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<List<MilestoneDto>>>> GetMilestones(Guid initiativeId)
     {
         var result = await mediator.Send(new GetMilestonesByInitiativeQueryRequest { InitiativeId = initiativeId });

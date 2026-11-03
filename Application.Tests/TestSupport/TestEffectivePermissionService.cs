@@ -1,5 +1,6 @@
 using Application.CQRS.AccessControl;
 using Application.Interface.IService;
+using System.Linq;
 
 namespace Application.Tests.TestSupport;
 
@@ -45,6 +46,11 @@ internal sealed class TestEffectivePermissionService : IEffectivePermissionServi
         Guid userId, string permission, CancellationToken cancellationToken = default)
         => Task.FromResult(
             grants.TryGetValue(userId, out var set) && set.Contains(permission));
+
+    public Task<bool> HasAnyPermissionAsync(
+        Guid userId, IReadOnlyCollection<string> permissions, CancellationToken cancellationToken = default)
+        => Task.FromResult(
+            grants.TryGetValue(userId, out var set) && permissions.Any(set.Contains));
 
     public Task<EffectiveAccessResultDto> EvaluateDetailedAsync(
         Guid userId, CancellationToken cancellationToken = default)

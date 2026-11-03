@@ -18,8 +18,15 @@ public class Initiative : CommonEntity
     public Guid? KpiId { get; set; }
     public Kpi? Kpi { get; set; }
 
-    public Guid OwnerId { get; set; }
+    /// <summary>
+    /// Exactly one owner is held: an individual user (<see cref="OwnerId"/>) or a division
+    /// (<see cref="DivisionOwnerId"/>). Division ownership grants no account permissions.
+    /// </summary>
+    public Guid? OwnerId { get; set; }
     public User? Owner { get; set; }
+
+    public Guid? DivisionOwnerId { get; set; }
+    public Division? DivisionOwner { get; set; }
 
     public InitiativePriority Priority { get; set; } = InitiativePriority.Medium;
 

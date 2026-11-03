@@ -64,7 +64,8 @@ public class KpiTargetActualLifecycleTests
             new KpiActualValueRepository(lease.Context),
             new TestCurrentUserService(),
             new TestSpmsJobScheduler(),
-            new Application.Services.AuditContext());
+            new Application.Services.AuditContext(),
+            new TestEffectivePermissionService());
 
     // ── FR-309 day-dedupe ───────────────────────────────────────────────────
 
