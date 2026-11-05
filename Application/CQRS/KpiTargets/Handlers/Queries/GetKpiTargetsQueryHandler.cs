@@ -60,7 +60,8 @@ namespace Application.CQRS.KpiTargets.Handlers.Queries
                     FiscalMonth = period?.FiscalMonth ?? 0,
                     Quarter = period?.Quarter ?? 0,
                     Granularity = target.Granularity,
-                    TargetValue = target.TargetValue
+                    TargetValue = target.TargetValue,
+                    IsDerivedFromMonthly = target.IsDerivedFromMonthly
                 });
             }
 

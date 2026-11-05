@@ -15,5 +15,11 @@ namespace Application.DTOS.KpiTarget
         [JsonConverter(typeof(JsonStringEnumConverter))]
         public TargetGranularity Granularity { get; set; }
         public decimal TargetValue { get; set; }
+
+        /// <summary>
+        /// Set on a quarterly row that was computed from its monthly targets, so the editor
+        /// reopens in auto-calculate mode. Always false on monthly and annual rows.
+        /// </summary>
+        public bool IsDerivedFromMonthly { get; set; }
     }
 }

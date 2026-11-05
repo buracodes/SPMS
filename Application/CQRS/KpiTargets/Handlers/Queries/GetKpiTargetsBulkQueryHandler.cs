@@ -101,7 +101,8 @@ namespace Application.CQRS.KpiTargets.Handlers.Queries
                                 FiscalMonth = monthByPeriodId.GetValueOrDefault(target.FiscalPeriodId),
                                 Quarter = QuarterOf(monthByPeriodId.GetValueOrDefault(target.FiscalPeriodId)),
                                 Granularity = target.Granularity,
-                                TargetValue = target.TargetValue
+                                TargetValue = target.TargetValue,
+                                IsDerivedFromMonthly = target.IsDerivedFromMonthly
                             });
                         }
                     }

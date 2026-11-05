@@ -18,7 +18,9 @@ namespace Application.Tests.Kpis;
 
 public class KpiTargetHandlerTests
 {
-    private static (Guid fiscalYearId, Guid scorecardId, Guid kraId, Guid kpiId) CreateFixture(TestDbContextLease lease)
+    private static (Guid fiscalYearId, Guid scorecardId, Guid kraId, Guid kpiId) CreateFixture(
+        TestDbContextLease lease,
+        bool isCumulative = true)
     {
         var service = new FiscalCalendarService();
         var fiscalYear = service.CreateFiscalYear(2025);
@@ -35,7 +37,7 @@ public class KpiTargetHandlerTests
             Name = "Revenue Growth",
             Unit = "%",
             Weight = 100,
-            IsCumulative = true,
+            IsCumulative = isCumulative,
             DataSource = KpiDataSource.Manual,
             KpiType = KpiType.Lagging
         };
@@ -237,6 +239,117 @@ public class KpiTargetHandlerTests
         Assert.True(response.Success);
         Assert.Equal(17, response.Data!.Targets.Count);
         Assert.Contains(response.Data.Targets, t => t.Granularity == TargetGranularity.Annual && t.TargetValue == 78);
+    }
+
+    private static GetKpiTargetsQueryHandler CreateQueryHandler(TestDbContextLease lease) => new(
+        new KpiRepository(lease.Context),
+        new FiscalYearRepository(lease.Context),
+        new FiscalPeriodRepository(lease.Context),
+        new KpiTargetRepository(lease.Context));
+
+    /// <summary>
+    /// The monthly and quarterly rows obey the same reconciliation rule whether the quarter
+    /// values were typed or derived, so the flag on the quarter rows is the only record of the
+    /// editor mode the target page reopens in.
+    /// </summary>
+    [Fact]
+    public async Task SetKpiTargets_AutoCalculateQuarterly_FlagsQuarterRowsAndReadsBack()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        var dto = CreateDto(kpiId, fiscalYearId);
+        dto.AutoCalculateQuarterly = true;
+        var saved = await CreateHandler(lease)
+            .Handle(new SetKpiTargetsCommandRequest { Dto = dto }, CancellationToken.None);
+
+        Assert.All(
+            saved.Data!.Targets.Where(t => t.Granularity == TargetGranularity.Quarterly),
+            t => Assert.True(t.IsDerivedFromMonthly));
+        Assert.All(
+            saved.Data.Targets.Where(t => t.Granularity != TargetGranularity.Quarterly),
+            t => Assert.False(t.IsDerivedFromMonthly));
+
+        var response = await CreateQueryHandler(lease)
+            .Handle(new GetKpiTargetsQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+
+        Assert.Equal(4, response.Data!.Targets.Count(t => t.Granularity == TargetGranularity.Quarterly && t.IsDerivedFromMonthly));
+    }
+
+    [Fact]
+    public async Task SetKpiTargets_ManualQuarterRows_LeaveQuarterRowsUnflagged()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        await CreateHandler(lease)
+            .Handle(new SetKpiTargetsCommandRequest { Dto = CreateDto(kpiId, fiscalYearId) }, CancellationToken.None);
+
+        var response = await CreateQueryHandler(lease)
+            .Handle(new GetKpiTargetsQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+
+        Assert.DoesNotContain(response.Data!.Targets, t => t.IsDerivedFromMonthly);
+    }
+
+    [Fact]
+    public async Task SetKpiTargets_QuarterRowsOmitted_AreDerivedFromMonthlyAndFlagged()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        await CreateHandler(lease)
+            .Handle(
+                new SetKpiTargetsCommandRequest { Dto = CreateDto(kpiId, fiscalYearId, includeQuarterly: false) },
+                CancellationToken.None);
+
+        var response = await CreateQueryHandler(lease)
+            .Handle(new GetKpiTargetsQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+
+        Assert.Equal(4, response.Data!.Targets.Count(t => t.Granularity == TargetGranularity.Quarterly && t.IsDerivedFromMonthly));
+    }
+
+    [Fact]
+    public async Task SetKpiTargets_ResavedWithoutAutoCalculate_ClearsTheFlag()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+        var handler = CreateHandler(lease);
+
+        var auto = CreateDto(kpiId, fiscalYearId);
+        auto.AutoCalculateQuarterly = true;
+        await handler.Handle(new SetKpiTargetsCommandRequest { Dto = auto }, CancellationToken.None);
+
+        // The quarter rows are edited in place, so the saved flag has to follow the new request.
+        await handler.Handle(new SetKpiTargetsCommandRequest { Dto = CreateDto(kpiId, fiscalYearId) }, CancellationToken.None);
+
+        var response = await CreateQueryHandler(lease)
+            .Handle(new GetKpiTargetsQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+
+        Assert.DoesNotContain(response.Data!.Targets, t => t.IsDerivedFromMonthly);
+    }
+
+    [Fact]
+    public async Task SetKpiTargets_NonCumulativeKpi_NeverFlagsQuarterRows()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease, isCumulative: false);
+
+        var dto = new SetKpiTargetsDto
+        {
+            KpiId = kpiId,
+            FiscalYearId = fiscalYearId,
+            MonthlyTargets = Enumerable.Repeat(1000m, 12).ToList(),
+            QuarterlyTargets = Enumerable.Repeat(1000m, 4).ToList(),
+            AnnualTarget = 1000,
+            AutoCalculateQuarterly = true
+        };
+        await CreateHandler(lease)
+            .Handle(new SetKpiTargetsCommandRequest { Dto = dto }, CancellationToken.None);
+
+        var response = await CreateQueryHandler(lease)
+            .Handle(new GetKpiTargetsQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
+
+        Assert.DoesNotContain(response.Data!.Targets, t => t.IsDerivedFromMonthly);
     }
 
     [Fact]

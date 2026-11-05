@@ -179,7 +179,8 @@ namespace Application.CQRS.Scorecard.Handlers.Commands
                                 KpiId = kpiIdMap[kpi.Id],
                                 FiscalPeriodId = periodByMonth[target.FiscalPeriod!.FiscalMonth].Id,
                                 TargetValue = target.TargetValue,
-                                Granularity = target.Granularity
+                                Granularity = target.Granularity,
+                                IsDerivedFromMonthly = target.IsDerivedFromMonthly
                             });
                         }
                     }

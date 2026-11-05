@@ -59,6 +59,7 @@ public class KpiTargetRepository : GenericRepository<KpiTarget>, IKpiTargetRepos
             if (existingByKey.TryGetValue((target.FiscalPeriodId, target.Granularity), out var current))
             {
                 current.TargetValue = target.TargetValue;
+                current.IsDerivedFromMonthly = target.IsDerivedFromMonthly;
                 current.UpdatedDate = DateTime.UtcNow;
             }
             else

@@ -116,8 +116,10 @@ namespace Application.CQRS.KpiTargets.Handlers.Commands
             }
 
             IReadOnlyDictionary<int, decimal> quarterlyByQuarter;
-            if (dto.QuarterlyTargets is { Count: 4 } supplied)
+            var quarterRowsSupplied = dto.QuarterlyTargets is { Count: 4 };
+            if (quarterRowsSupplied)
             {
+                var supplied = dto.QuarterlyTargets!;
                 quarterlyByQuarter = Enumerable.Range(1, 4).ToDictionary(q => q, q => supplied[q - 1]);
             }
             else
@@ -126,6 +128,11 @@ namespace Application.CQRS.KpiTargets.Handlers.Commands
                 // quarter rows are not explicitly configured.
                 quarterlyByQuarter = KpiTargetReconciliation.DeriveQuarterly(kpi.IsCumulative, monthlyByMonth, annualTarget);
             }
+
+            // A cumulative quarter row is auto-calculated when the editor produced it from the
+            // monthly rows, whether that happened in the browser (flag) or here (no rows sent).
+            var quarterRowsAutoCalculated = kpi.IsCumulative &&
+                (!quarterRowsSupplied || dto.AutoCalculateQuarterly);
 
             KpiTargetReconciliation.Validate(kpi.IsCumulative, monthlyByMonth, quarterlyByQuarter, annualTarget);
 
@@ -151,7 +158,8 @@ namespace Application.CQRS.KpiTargets.Handlers.Commands
                     KpiId = kpi.Id,
                     FiscalPeriodId = periodByMonth[quarter * 3].Id,
                     TargetValue = quarterlyByQuarter[quarter],
-                    Granularity = TargetGranularity.Quarterly
+                    Granularity = TargetGranularity.Quarterly,
+                    IsDerivedFromMonthly = quarterRowsAutoCalculated
                 });
             }
 
@@ -205,7 +213,8 @@ namespace Application.CQRS.KpiTargets.Handlers.Commands
                     FiscalMonth = period.FiscalMonth,
                     Quarter = period.Quarter,
                     Granularity = target.Granularity,
-                    TargetValue = target.TargetValue
+                    TargetValue = target.TargetValue,
+                    IsDerivedFromMonthly = target.IsDerivedFromMonthly
                 });
             }
 

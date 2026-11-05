@@ -27,7 +27,12 @@ public class GetKpiByIdQueryHandler : IRequestHandler<GetKpiByIdQueryRequest, Re
         var kpi = await kpiRepository.GetByIdWithScorecardAsync(request.Id)
             ?? throw new NotFoundException(nameof(KpiEntity), request.Id);
 
-        if (!await organizationalScope.IsAssignedKpiAsync(kpi.OwnerId, kpi.DivisionOwnerId, cancellationToken))
+        // Same precedence as the KPI list: live corporate visibility opens any KPI, so the
+        // corporate scorecard's owners can be viewed and changed by an admin or power user even
+        // when their HR record also carries a division claim. Without it a division account
+        // stays limited to the KPIs it owns directly or through its division.
+        if (!await organizationalScope.HasCorporateAccessAsync(cancellationToken) &&
+            !await organizationalScope.IsAssignedKpiAsync(kpi.OwnerId, kpi.DivisionOwnerId, cancellationToken))
         {
             throw new ForbiddenException("You do not have access to this KPI.");
         }

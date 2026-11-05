@@ -43,12 +43,14 @@ namespace Application.CQRS.ScoreSnapshot.Handlers.Queries
                 throw new BadRequestException(
                     "The requested fiscal year does not match the scorecard's fiscal year.");
 
-            // A division claim is authoritative: the employee only ever reads snapshots for a
-            // scorecard one of their authorized divisions plans on, and only that division's
-            // KPI/goal scores are projected back.
+            // Corporate visibility wins, exactly as in the KPI list handler: an admin or power
+            // user authors the corporate scorecard even when their HR record also carries a
+            // division claim. Only a purely division-scoped account is narrowed to a scorecard
+            // one of its divisions plans on, and only that division's scores are projected back.
+            var hasCorporateAccess = await _organizationalScope.HasCorporateAccessAsync(cancellationToken);
             var divisionIds = _organizationalScope.DivisionIds;
             ScorePeriodResult result;
-            if (divisionIds.Count > 0)
+            if (!hasCorporateAccess && divisionIds.Count > 0)
             {
                 Domain.Entities.DivisionPlan? plan = null;
                 foreach (var divisionId in divisionIds)

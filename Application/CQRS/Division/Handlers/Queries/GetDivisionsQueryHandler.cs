@@ -27,11 +27,14 @@ namespace Application.CQRS.Division.Handlers.Queries
         {
             var divisions = await divisionRepository.GetActiveAsync();
 
-            // Division accounts only discover their own division; corporate and read-only
-            // corporate accounts (View Only) keep the full list. Portfolio visibility is
-            // resolved once from the live authorization state rather than per division.
-            var hasPortfolioAccess = await organizationalScope.HasDivisionPortfolioAccessAsync(cancellationToken);
-            if (!hasPortfolioAccess)
+            // Division accounts only discover their own division. Corporate accounts keep the
+            // full list, including an admin or power user whose HR record also carries a division
+            // claim: they assign KPI owners from the corporate scorecard, so every active
+            // division has to be selectable. Portfolio or corporate-wide visibility is resolved
+            // once from the live authorization state rather than per division.
+            var canBrowsePortfolio = await organizationalScope.HasDivisionPortfolioAccessAsync(cancellationToken)
+                || await organizationalScope.HasCorporateAccessAsync(cancellationToken);
+            if (!canBrowsePortfolio)
             {
                 var authorizedDivisionIds = organizationalScope.DivisionIds;
                 divisions = authorizedDivisionIds.Count > 0

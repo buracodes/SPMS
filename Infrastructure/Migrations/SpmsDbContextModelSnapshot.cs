@@ -1139,6 +1139,9 @@ namespace Infrastructure.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsDerivedFromMonthly")
+                        .HasColumnType("bit");
+
                     b.Property<Guid>("KpiId")
                         .HasColumnType("uniqueidentifier");
 
