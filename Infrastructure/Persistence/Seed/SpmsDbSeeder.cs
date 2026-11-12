@@ -184,13 +184,16 @@ namespace Infrastructure.Persistence.Seed
                 Permissions.OrganizationView
             },
 
+            // The entry persona reports actuals and nothing else. It deliberately holds no
+            // corporate scorecard, goal, KRA, KPI or target catalog read, no reporting page and
+            // no organization browse, so the Scorecards and Strategic Scorecard pages stay closed.
+            // The Data Entry page works from the entry-scoped board read behind `actuals:view`.
             [Roles.DataInputUser] = new[]
             {
-                Permissions.ScorecardView, Permissions.DashboardView, Permissions.GoalsView, Permissions.KraView, Permissions.KpiView,
-                Permissions.ActualsView, Permissions.ActualsEnter, Permissions.DataUpload, Permissions.DataValidate,
-                Permissions.TargetsView, Permissions.ReportsView, Permissions.InitiativesView,
-                Permissions.DivisionView, Permissions.DivisionActualsEnter, Permissions.DivisionReportsView,
-                Permissions.OrganizationView
+                Permissions.DashboardView,
+                Permissions.ActualsView, Permissions.ActualsEnter,
+                Permissions.DataUpload, Permissions.DataValidate,
+                Permissions.DivisionActualsEnter
             },
 
             [Roles.ViewOnly] = new[]

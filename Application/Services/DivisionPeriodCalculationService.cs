@@ -220,8 +220,11 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
                 TimeAggregator.Aggregate(monthlyTargetByMonth, scope.FromMonth, scope.ToMonth, kpi.IsCumulative)
         };
 
-        decimal? periodScore = null;
-        if (periodTarget.HasValue && periodTarget.Value > 0m && periodActual.HasValue)
+        // FR-605: non-cumulative scores average monthly scores; coarse-only targets have none, so they fall through to period values.
+        decimal? periodScore = kpi.IsCumulative
+            ? null
+            : TimeAggregator.Aggregate(monthlyScores.Values.ToList(), false);
+        if (periodScore == null && periodTarget.HasValue && periodTarget.Value > 0m && periodActual.HasValue)
             periodScore = kpiScoreCalculator.Calculate(
                 new KpiScoreRequest(periodActual.Value, periodTarget.Value, kpi.OptimizationType, kpi.ToleranceBandPercent));
 

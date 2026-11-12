@@ -36,6 +36,19 @@ namespace API.Controllers
             return Ok(result);
         }
 
+        /// <summary>
+        /// The Data Entry board for the signed-in principal: the KPIs they report on in the
+        /// fiscal year, with their monthly targets and recorded actuals. The scope is resolved
+        /// server side, so a division account never receives another division's KPIs.
+        /// </summary>
+        [HttpGet("entry-board")]
+        [Authorize(Policy = Permissions.ActualsView)]
+        public async Task<ActionResult> EntryBoard([FromQuery] Guid fiscalYearId)
+        {
+            var result = await mediator.Send(new GetEntryBoardQueryRequest { FiscalYearId = fiscalYearId });
+            return Ok(result);
+        }
+
         [HttpPost]
         [Authorize(Policy = Permissions.ActualsEnter)]
         public async Task<ActionResult> Enter([FromBody] EnterActualValueDto dto)

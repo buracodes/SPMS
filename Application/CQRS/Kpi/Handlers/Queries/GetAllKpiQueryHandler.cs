@@ -75,50 +75,9 @@ public class GetAllKpiQueryHandler : IRequestHandler<GetAllKpiQueryRequest, Resp
                  kra.GoalId == request.GoalId.Value) ||
                 (k.DivisionGoal != null && k.DivisionGoal.ParentGoalId == request.GoalId.Value));
 
-        var dtos = filtered.Select(k =>
-        {
-            var scorecardName = scorecardById.TryGetValue(k.ScorecardId, out var scorecard) ? scorecard.Name : null;
-            var kra = k.KraId.HasValue && kraById.TryGetValue(k.KraId.Value, out var found) ? found : null;
-            var goalId = kra?.GoalId ?? k.DivisionGoal?.ParentGoalId;
-            var goalName = goalId.HasValue && goalNameById.TryGetValue(goalId.Value, out var name) ? name : null;
-
-            return new GetAllKpiDto
-            {
-                Id = k.Id,
-                ScorecardId = k.ScorecardId,
-                ScorecardName = scorecardName,
-                KraId = k.KraId,
-                KraName = kra?.Name,
-                GoalId = goalId,
-                GoalName = goalName,
-                DivisionGoalId = k.DivisionGoalId,
-                OwnerId = k.OwnerId,
-                OwnerName = k.Owner?.FullName,
-                DivisionOwnerId = k.DivisionOwnerId,
-                DivisionOwnerName = k.DivisionOwner?.Name,
-                UnitOfMeasureId = k.UnitOfMeasureId,
-                Name = k.Name,
-                Description = k.Description,
-                Unit = k.Unit,
-                Weight = k.Weight,
-                ToleranceBandPercent = k.ToleranceBandPercent,
-                KpiType = k.KpiType,
-                OptimizationType = k.OptimizationType,
-                DataSource = k.DataSource,
-                IsCumulative = k.IsCumulative,
-                ParentKpiId = k.ParentKpiId,
-                Baseline = k.Baseline,
-                MinValue = k.MinValue,
-                MaxValue = k.MaxValue,
-                Formula = k.Formula,
-                IsActive = k.IsActive,
-                CreatedBy = k.CreatedBy,
-                CreatedDate = k.CreatedDate,
-                UpdatedBy = k.UpdatedBy,
-                UpdatedDate = k.UpdatedDate,
-                Status = k.Status
-            };
-        }).ToList();
+        var dtos = filtered
+            .Select(k => KpiRowMapper.Map(k, scorecardById, kraById, goalNameById))
+            .ToList();
 
         return new Response<List<GetAllKpiDto>>
         {

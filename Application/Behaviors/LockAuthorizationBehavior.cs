@@ -37,18 +37,30 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
     {
         if (request is EnterActualValueCommandRequest command && command.Dto != null)
         {
-            await AuthorizeActualValueWriteAsync(command.Dto.KpiId, command.Dto.FiscalPeriodId, command.Dto.OverrideReason, allowDivisionOwnership: false, cancellationToken);
+            await AuthorizeActualValueWriteAsync(command.Dto.KpiId, command.Dto.FiscalPeriodId, command.Dto.OverrideReason, ActualsEntryChannel.Corporate, cancellationToken);
         }
 
         if (request is EnterDivisionActualValueCommandRequest divisionCommand && divisionCommand.Dto != null)
         {
-            await AuthorizeActualValueWriteAsync(divisionCommand.Dto.KpiId, divisionCommand.Dto.FiscalPeriodId, divisionCommand.Dto.OverrideReason, allowDivisionOwnership: true, cancellationToken);
+            await AuthorizeActualValueWriteAsync(divisionCommand.Dto.KpiId, divisionCommand.Dto.FiscalPeriodId, divisionCommand.Dto.OverrideReason, ActualsEntryChannel.DivisionPlan, cancellationToken);
         }
 
         return await next();
     }
 
-    private async Task AuthorizeActualValueWriteAsync(Guid kpiId, Guid fiscalPeriodId, string? overrideReason, bool allowDivisionOwnership, CancellationToken cancellationToken)
+    /// <summary>Which actual-entry endpoint the write arrived on; it decides how a division account can own the KPI.</summary>
+    private enum ActualsEntryChannel
+    {
+        Corporate,
+        DivisionPlan
+    }
+
+    private async Task AuthorizeActualValueWriteAsync(
+        Guid kpiId,
+        Guid fiscalPeriodId,
+        string? overrideReason,
+        ActualsEntryChannel channel,
+        CancellationToken cancellationToken)
     {
         var kpi = await kpiRepository.GetByIdWithScorecardAsync(kpiId);
         if (kpi == null || kpi.Scorecard == null)
@@ -59,15 +71,25 @@ public class LockAuthorizationBehavior<TRequest, TResponse> : IPipelineBehavior<
         var currentUserId = currentUserService.UserId;
         var isKpiOwner = currentUserId.HasValue && kpi.OwnerId.HasValue && kpi.OwnerId.Value == currentUserId.Value;
         // FR-906: division KPIs are owned by a division, not an individual user, so the
-        // division account must be accepted as the owner during the open window. An
-        // unassigned division KPI (DivisionOwnerId is optional) falls through to the
-        // handler, which verifies the KPI belongs to an authorized division plan.
+        // division account must be accepted as the owner during the open window. On the
+        // corporate board that match is only an explicit division owner, and a KPI of a
+        // division plan stays on the division endpoint; there, an unassigned plan KPI falls
+        // through to the handler, which verifies the KPI belongs to an authorized division plan.
         var divisionScope = currentUserService.DivisionIds;
-        var isDivisionOwner = allowDivisionOwnership
-            && divisionScope.Count > 0
-            && (kpi.DivisionOwnerId.HasValue
-                ? divisionScope.Contains(kpi.DivisionOwnerId.Value)
-                : kpi.DivisionGoalId.HasValue);
+        var isDivisionOwner = channel switch
+        {
+            // The division board reports a plan KPI for its owning division, including one the
+            // division has not assigned an owner to yet; the handler verifies the plan membership.
+            ActualsEntryChannel.DivisionPlan => divisionScope.Count > 0 &&
+                (kpi.DivisionOwnerId.HasValue
+                    ? divisionScope.Contains(kpi.DivisionOwnerId.Value)
+                    : kpi.DivisionGoalId.HasValue),
+            // The corporate board accepts the owning division only for a corporate KPI with an
+            // explicit division owner, so a plan KPI stays on the division endpoint.
+            _ => !kpi.DivisionGoalId.HasValue &&
+                kpi.DivisionOwnerId.HasValue &&
+                divisionScope.Contains(kpi.DivisionOwnerId.Value),
+        };
 
         // The override right is resolved live: a revoked grant must stop bypassing closure
         // and lock rules on the next request, even though the JWT still carries the claim.

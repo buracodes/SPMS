@@ -126,6 +126,64 @@ public class LockAuthorizationBehaviorTests
     }
 
     [Fact]
+    public async Task Allows_PeriodOpen_ForOwningDivision_OnCorporateActualCommand()
+    {
+        // The corporate Data Entry board is the reporting surface for a corporate KPI that
+        // was assigned to a division, so the owning division account must be able to save it
+        // during the entry window — the individual KPI owner field is empty by design.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateCorporateDivisionOwnedFixtureAsync(lease);
+        // July 2025 (fiscal month 1) is open during 1-7 August 2025.
+        var clock = TestBusinessClock.On(new DateTime(2025, 8, 3, 9, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            DivisionId = fixture.OwnerDivisionId,
+        }, clock);
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10,
+            }
+        };
+
+        var invoked = false;
+        await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<ActualValueDto>()); }, CancellationToken.None);
+
+        Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Blocks_PeriodOpen_ForAnotherDivision_OnCorporateActualCommand()
+    {
+        // Reporting is division-scoped: a KPI owned by Application Development stays closed to
+        // a Trade Operations account even though both hold the entry right.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateCorporateDivisionOwnedFixtureAsync(lease);
+        var clock = TestBusinessClock.On(new DateTime(2025, 8, 3, 9, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            DivisionId = fixture.OtherDivisionId,
+        }, clock);
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10,
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Blocks_WhenPeriodLocked_WithoutOverride()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
@@ -552,6 +610,47 @@ public class LockAuthorizationBehaviorTests
         lease.Context.Divisions.AddRange(ownerDivision, otherDivision);
         lease.Context.DivisionPlans.Add(plan);
         lease.Context.DivisionGoals.Add(divisionGoal);
+        lease.Context.Kpis.Add(kpi);
+        await lease.Context.SaveChangesAsync();
+
+        return (kpi.Id, july.Id, ownerDivision.Id, otherDivision.Id);
+    }
+
+    private static async Task<(Guid KpiId, Guid PeriodId, Guid OwnerDivisionId, Guid OtherDivisionId)> CreateCorporateDivisionOwnedFixtureAsync(TestDbContextLease lease)
+    {
+        var calendar = new FiscalCalendarService();
+        var fiscalYear = calendar.CreateFiscalYear(2025);
+        var periods = calendar.GeneratePeriods(fiscalYear);
+        var july = periods.First(p => p.FiscalMonth == 1);
+
+        var scorecard = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = fiscalYear.Id,
+            Name = "Corporate Division Owned",
+            Scope = ScorecardScope.Corporate,
+        };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Parent Goal", Weight = 100 };
+        var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Service Delivery", Weight = 100 };
+        var ownerDivision = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Application Development", Code = "APP" };
+        var otherDivision = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Trade Operations", Code = "TRO" };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            KraId = kra.Id,
+            DivisionOwnerId = ownerDivision.Id,
+            Name = "Systems Availability",
+            Unit = "%",
+            Weight = 100,
+        };
+
+        lease.Context.FiscalYears.Add(fiscalYear);
+        lease.Context.FiscalPeriods.AddRange(periods);
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Kras.Add(kra);
+        lease.Context.Divisions.AddRange(ownerDivision, otherDivision);
         lease.Context.Kpis.Add(kpi);
         await lease.Context.SaveChangesAsync();
 

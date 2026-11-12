@@ -84,6 +84,10 @@ namespace Domain.Constants
         /// <summary>
         /// The view-only baseline every active HR employee receives. Corporate scorecard,
         /// actual-entry, edit and RBAC rights are deliberately absent.
+        /// <see cref="ActualsView"/> is the one exception: it opens the Data Entry page so an
+        /// employee can follow the values their own division reports, and every read behind it
+        /// is narrowed to the KPIs of the employee's HR divisions. Entering a value still needs
+        /// <see cref="ActualsEnter"/> plus ownership of the KPI.
         /// </summary>
         public static readonly IReadOnlySet<string> BaselinePermissions =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -92,7 +96,8 @@ namespace Domain.Constants
                 OrganizationView,
                 DivisionScorecardView,
                 DivisionPerformanceView,
-                DivisionInitiativeView
+                DivisionInitiativeView,
+                ActualsView
             };
 
         public const string AdminUsersManage = "admin:users.manage";

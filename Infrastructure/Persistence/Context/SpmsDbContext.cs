@@ -9,10 +9,6 @@ using System.Text;
 
 namespace Infrastructure.Persistence.Context
 {
-    public partial class hrDbContext
-    {
-    }
-
     public class SpmsDbContext : DbContext
     {
         public SpmsDbContext(DbContextOptions<SpmsDbContext> options) : base(options)
@@ -110,31 +106,5 @@ namespace Infrastructure.Persistence.Context
         public DbSet<InitiativeUpdateLog> InitiativeUpdateLogs { get; set; }
         public DbSet<InitiativeDependency> InitiativeDependencies { get; set; }
 
-    }
-
-    public class SecurityDbContext : DbContext
-    {
-        public SecurityDbContext(DbContextOptions<SecurityDbContext> options) : base(options)
-        {
-        }
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-            foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
-            {
-                foreignKey.DeleteBehavior = DeleteBehavior.Restrict;
-            }
-            modelBuilder.ApplyConfigurationsFromAssembly(
-               typeof(SecurityDbContext).Assembly);
-
-        }
-    }
-
-    public partial class hrDbContext : DbContext
-    {
-        public hrDbContext(DbContextOptions<hrDbContext> options) : base(options)
-        {
-        }
     }
 }

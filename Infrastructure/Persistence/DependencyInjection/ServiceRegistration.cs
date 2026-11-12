@@ -31,11 +31,6 @@ namespace Infrastructure.Persistence.DependencyInjection
                     .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
             );
 
-            services.AddDbContext<SecurityDbContext>((serviceProvider, options) =>
-                options.UseSqlServer(configuration.GetConnectionString("SecurityConnection"))
-                    .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntitySaveChangesInterceptor>())
-            );
-
             services.AddDbContext<hrDbContext>(options =>
                 options.UseSqlServer(configuration.GetConnectionString("hrConnection"))
             );
