@@ -99,6 +99,34 @@ public class LockAuthorizationBehaviorTests
     }
 
     [Fact]
+    public async Task Blocks_WhenPeriodOpen_ForUnassignedAccount()
+    {
+        // No division assignment and no override right: viewing a division is not an entry
+        // right, so the division actuals endpoint stays closed during the open window.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateDivisionFixtureAsync(lease);
+        var clock = TestBusinessClock.On(new DateTime(2025, 8, 3, 9, 0, 0, DateTimeKind.Utc));
+        var behavior = CreateDivisionBehavior(lease, new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid()
+        }, clock);
+
+        var command = new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.OwnerDivisionId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<DivisionActualValueDto>()), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Blocks_WhenPeriodOpen_ForDivisionOwner_OnCorporateActualCommand()
     {
         // Division ownership only applies to the division actuals path; corporate KPI
@@ -458,6 +486,193 @@ public class LockAuthorizationBehaviorTests
 
         await Assert.ThrowsAsync<PeriodLockedException>(() =>
             behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
+    }
+
+    // ── Role matrix across the locked entry window ──────────────────────────
+
+    [Fact]
+    public async Task Allows_Locked_ForClaimedAdmin_OnCorporateActualCommand_WithOverrideReason()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureWithLockAsync(lease);
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = Guid.NewGuid(),
+            Permissions = new[]
+            {
+                Permissions.PerformanceMonitorView,
+                Permissions.ActualsView,
+                Permissions.ActualsEnter,
+                Permissions.ActualsOverride
+            }
+        });
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 100,
+                OverrideReason = "Admin correction of a locked month."
+            }
+        };
+
+        var invoked = false;
+        await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<ActualValueDto>()); }, CancellationToken.None);
+
+        Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Blocks_Locked_ForClaimedExecutive_OnCorporateActualCommand_WithoutOverride()
+    {
+        // Executive keeps read-only visibility; it cannot write outside the entry window.
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureWithLockAsync(lease);
+        var behavior = CreateBehavior(lease, new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = Guid.NewGuid(),
+            Permissions = new[]
+            {
+                Permissions.PerformanceMonitorView,
+                Permissions.ActualsView,
+                Permissions.DivisionView
+            }
+        });
+
+        var command = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 100,
+                OverrideReason = "Executive must not be able to force this write."
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Allows_Locked_ForClaimedPowerUser_OnDivisionActualCommand_WithOverrideReason()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateLockedDivisionFixtureAsync(lease);
+        var behavior = CreateDivisionBehavior(lease, new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = fixture.OtherDivisionId,
+            Permissions = new[]
+            {
+                Permissions.PerformanceMonitorView,
+                Permissions.DivisionActualsEnter,
+                Permissions.ActualsOverride
+            }
+        });
+
+        var command = new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.OwnerDivisionId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10,
+                OverrideReason = "Power User correction of a locked division month."
+            }
+        };
+
+        var invoked = false;
+        await behavior.Handle(command, _ => { invoked = true; return Task.FromResult(new Response<DivisionActualValueDto>()); }, CancellationToken.None);
+
+        Assert.True(invoked);
+    }
+
+    [Fact]
+    public async Task Blocks_Locked_ForClaimedDataInput_OnDivisionActualCommand_WithoutOverride()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateLockedDivisionFixtureAsync(lease);
+        var behavior = CreateDivisionBehavior(lease, new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = fixture.OwnerDivisionId,
+            Permissions = new[]
+            {
+                Permissions.ActualsView,
+                Permissions.ActualsEnter,
+                Permissions.DivisionActualsEnter
+            }
+        });
+
+        var command = new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.OwnerDivisionId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10,
+                OverrideReason = "Data Input must not be able to force this write."
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<DivisionActualValueDto>()), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Blocks_Locked_ForClaimedViewOnly_OnDivisionActualCommand()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateLockedDivisionFixtureAsync(lease);
+        var behavior = CreateDivisionBehavior(lease, new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            DivisionId = fixture.OwnerDivisionId,
+            Permissions = new[]
+            {
+                Permissions.ActualsView,
+                Permissions.DivisionView
+            }
+        });
+
+        var command = new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.OwnerDivisionId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10
+            }
+        };
+
+        await Assert.ThrowsAsync<PeriodLockedException>(() =>
+            behavior.Handle(command, _ => Task.FromResult(new Response<DivisionActualValueDto>()), CancellationToken.None));
+    }
+
+    private static async Task<(Guid KpiId, Guid PeriodId, Guid OwnerDivisionId, Guid OtherDivisionId)> CreateLockedDivisionFixtureAsync(
+        TestDbContextLease lease)
+    {
+        var fixture = await CreateDivisionFixtureAsync(lease);
+        lease.Context.PeriodLockConfigs.Add(new PeriodLockConfig
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = (await lease.Context.Scorecards.SingleAsync()).Id,
+            FiscalPeriodId = fixture.PeriodId,
+            EntryOpenDay = 1,
+            CutoffDay = 7,
+            ReminderDaysBeforeCutoff = 2,
+            LockedAtUtc = new DateTime(2025, 7, 20, 8, 0, 0, DateTimeKind.Utc)
+        });
+        await lease.Context.SaveChangesAsync();
+        return fixture;
     }
 
     private static async Task<(Guid KpiId, Guid ScorecardId, Guid PeriodId)> CreateClosedScorecardFixtureAsync(TestDbContextLease lease)

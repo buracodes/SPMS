@@ -19,6 +19,7 @@ namespace Application.CQRS.Division.Handlers.Commands
         private readonly IDivisionContributionRepository contributionRepository;
         private readonly IDivisionGoalRepository divisionGoalRepository;
         private readonly IGoalRepository goalRepository;
+        private readonly IKpiRepository kpiRepository;
         private readonly IUnitOfWork unitOfWork;
         private readonly IOrganizationalScopeService organizationalScope;
 
@@ -29,6 +30,7 @@ namespace Application.CQRS.Division.Handlers.Commands
             IDivisionContributionRepository _contributionRepository,
             IDivisionGoalRepository _divisionGoalRepository,
             IGoalRepository _goalRepository,
+            IKpiRepository _kpiRepository,
             IUnitOfWork _unitOfWork,
             IOrganizationalScopeService _organizationalScope)
         {
@@ -39,6 +41,7 @@ namespace Application.CQRS.Division.Handlers.Commands
             contributionRepository = _contributionRepository;
             divisionGoalRepository = _divisionGoalRepository;
             goalRepository = _goalRepository;
+            kpiRepository = _kpiRepository;
             unitOfWork = _unitOfWork;
         }
 
@@ -79,16 +82,19 @@ namespace Application.CQRS.Division.Handlers.Commands
                 };
                 await unitOfWork.AddRangeAsync(new[] { plan }, cancellationToken);
             }
-            else if (plan.PlanStatus != DivisionPlanStatus.Draft)
+            else if (plan.PlanStatus == DivisionPlanStatus.Locked)
             {
-                throw new BadRequestException("Contributions cannot be modified once the plan has been finalized or locked.");
+                throw new BadRequestException("This division plan is locked and its contributions cannot be changed.");
             }
 
             var existing = await contributionRepository.GetByPlanAsync(plan.Id);
             var existingGoalIds = existing.Select(c => c.GoalId).ToHashSet();
             var removedGoalIds = existingGoalIds.Where(id => !goalIds.Contains(id)).ToList();
+            var addedGoalIds = goalIds.Where(id => !existingGoalIds.Contains(id)).ToList();
 
-            var cascadeGoals = new List<Domain.Entities.DivisionGoal>();
+            // FR-907 asks only that a changed selection explain its dependent goals/KPIs.
+            // The plan keeps its current status: a finalized plan stays finalized so Data
+            // Input Users do not lose entry access, and recorded actuals are never touched.
             if (removedGoalIds.Count > 0)
             {
                 var hasDivisionGoals = await divisionGoalRepository.ExistsUnderParentGoalsAsync(plan.Id, removedGoalIds);
@@ -98,9 +104,23 @@ namespace Application.CQRS.Division.Handlers.Commands
                 if (hasDivisionGoals && request.CascadeRemoveDependents)
                 {
                     var planGoals = await divisionGoalRepository.GetByPlanWithKpisAsync(plan.Id);
-                    cascadeGoals = planGoals
+                    var cascadeGoals = planGoals
                         .Where(g => removedGoalIds.Contains(g.ParentGoalId))
                         .ToList();
+
+                    // Historical actuals are immutable evidence. A goal/KPI that already has
+                    // performance cannot be cascade-deleted; the caller must keep the
+                    // dependents (or use a controlled retirement path) instead.
+                    var dependentKpiIds = cascadeGoals
+                        .SelectMany(g => g.Kpis)
+                        .Select(k => k.Id)
+                        .ToList();
+                    if (dependentKpiIds.Count > 0
+                        && await kpiRepository.HasAnyActualDataAsync(dependentKpiIds))
+                    {
+                        throw new BadRequestException(
+                            "Cannot remove this corporate goal and its division goals/KPIs because they already have recorded actual performance data. Keep the goals and KPIs so historical values are preserved.");
+                    }
 
                     var now = DateTime.UtcNow;
                     foreach (var goal in cascadeGoals)
@@ -125,8 +145,7 @@ namespace Application.CQRS.Division.Handlers.Commands
                 await unitOfWork.RemoveRangeAsync(toRemove, cancellationToken);
             }
 
-            var added = goalIds
-                .Where(id => !existingGoalIds.Contains(id))
+            var added = addedGoalIds
                 .Select(id => new DivisionContribution
                 {
                     Id = Guid.NewGuid(),

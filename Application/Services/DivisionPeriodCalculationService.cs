@@ -88,7 +88,10 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
                 }
             }
 
-            var periodContributions = goalKpis
+            // FR-905: only Lagging KPIs carry score weight; Leading KPIs stay informational.
+            var scoringKpis = goalKpis.Where(k => k.KpiType == KpiType.Lagging).ToList();
+
+            var periodContributions = scoringKpis
                 .Select(kpi =>
                 {
                     kpiPeriods.TryGetValue(kpi.Id, out var per);
@@ -100,7 +103,7 @@ public sealed class DivisionPeriodCalculationService : IDivisionPeriodCalculatio
             var monthlyScores = new Dictionary<int, decimal?>();
             for (int m = scope.FromMonth; m <= scope.ToMonth; m++)
             {
-                var monthlyContributions = goalKpis
+                var monthlyContributions = scoringKpis
                     .Select(kpi =>
                     {
                         kpiPeriods.TryGetValue(kpi.Id, out var per);

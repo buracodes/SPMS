@@ -53,6 +53,7 @@ public class DivisionPlanMutationHandlerTests
             new DivisionContributionRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
+            new KpiRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
             new TestOrganizationalScopeService());
 
@@ -240,6 +241,15 @@ public class DivisionPlanMutationHandlerTests
     {
         var plan = await lease.Context.DivisionPlans.SingleAsync();
         plan.PlanStatus = DivisionPlanStatus.Finalized;
+        plan.FinalizedAtUtc = DateTime.UtcNow;
+        plan.FinalizedByUserId = userId;
+        await lease.Context.SaveChangesAsync();
+    }
+
+    private static async Task LockPlanAsync(TestDbContextLease lease)
+    {
+        var plan = await lease.Context.DivisionPlans.SingleAsync();
+        plan.PlanStatus = DivisionPlanStatus.Locked;
         await lease.Context.SaveChangesAsync();
     }
 
@@ -333,7 +343,7 @@ public class DivisionPlanMutationHandlerTests
     }
 
     [Fact]
-    public async Task UpdateDivisionGoal_FinalizedPlan_ThrowsBadRequest()
+    public async Task UpdateDivisionGoal_FinalizedPlan_IsAllowed()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateFixture(lease);
@@ -342,8 +352,26 @@ public class DivisionPlanMutationHandlerTests
         await FinalizePlanAsync(lease);
 
         var handler = CreateUpdateGoalHandler(lease);
+        var response = await handler.Handle(
+            new UpdateDivisionGoalCommandRequest { DivisionGoalId = goalId, Name = "Renamed" }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal("Renamed", (await lease.Context.DivisionGoals.SingleAsync(g => g.Id == goalId)).Name);
+        Assert.Equal(DivisionPlanStatus.Finalized, (await lease.Context.DivisionPlans.SingleAsync()).PlanStatus);
+    }
+
+    [Fact]
+    public async Task UpdateDivisionGoal_LockedPlan_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        var goalId = await CreateGoalWithKpiAsync(lease, fixture);
+        await LockPlanAsync(lease);
+
         await Assert.ThrowsAsync<BadRequestException>(() =>
-            handler.Handle(new UpdateDivisionGoalCommandRequest { DivisionGoalId = goalId, Name = "Renamed" }, CancellationToken.None));
+            CreateUpdateGoalHandler(lease).Handle(
+                new UpdateDivisionGoalCommandRequest { DivisionGoalId = goalId, Name = "Renamed" }, CancellationToken.None));
     }
 
     // ── Delete division goal ──────────────────────────────────────────────
@@ -367,7 +395,7 @@ public class DivisionPlanMutationHandlerTests
     }
 
     [Fact]
-    public async Task DeleteDivisionGoal_FinalizedPlan_ThrowsBadRequest()
+    public async Task DeleteDivisionGoal_FinalizedPlan_IsAllowed()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateFixture(lease);
@@ -375,9 +403,25 @@ public class DivisionPlanMutationHandlerTests
         var goalId = await CreateGoalWithKpiAsync(lease, fixture);
         await FinalizePlanAsync(lease);
 
-        var handler = CreateDeleteGoalHandler(lease);
+        var result = await CreateDeleteGoalHandler(lease).Handle(
+            new DeleteDivisionGoalCommandRequest { DivisionGoalId = goalId }, CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Equal(DivisionPlanStatus.Finalized, (await lease.Context.DivisionPlans.SingleAsync()).PlanStatus);
+    }
+
+    [Fact]
+    public async Task DeleteDivisionGoal_LockedPlan_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        var goalId = await CreateGoalWithKpiAsync(lease, fixture);
+        await LockPlanAsync(lease);
+
         await Assert.ThrowsAsync<BadRequestException>(() =>
-            handler.Handle(new DeleteDivisionGoalCommandRequest { DivisionGoalId = goalId }, CancellationToken.None));
+            CreateDeleteGoalHandler(lease).Handle(
+                new DeleteDivisionGoalCommandRequest { DivisionGoalId = goalId }, CancellationToken.None));
     }
 
     // ── Update division KPI ───────────────────────────────────────────────
@@ -584,7 +628,7 @@ public class DivisionPlanMutationHandlerTests
     }
 
     [Fact]
-    public async Task DeleteDivisionKpi_FinalizedPlan_ThrowsBadRequest()
+    public async Task DeleteDivisionKpi_FinalizedPlan_IsAllowed()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateFixture(lease);
@@ -593,9 +637,26 @@ public class DivisionPlanMutationHandlerTests
         var kpi = await lease.Context.Kpis.SingleAsync(k => k.DivisionGoalId == goalId);
         await FinalizePlanAsync(lease);
 
-        var handler = CreateDeleteKpiHandler(lease);
+        var deleted = await CreateDeleteKpiHandler(lease).Handle(
+            new DeleteDivisionKpiCommandRequest { DivisionKpiId = kpi.Id }, CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.Equal(DivisionPlanStatus.Finalized, (await lease.Context.DivisionPlans.SingleAsync()).PlanStatus);
+    }
+
+    [Fact]
+    public async Task DeleteDivisionKpi_LockedPlan_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        var goalId = await CreateGoalWithKpiAsync(lease, fixture);
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.DivisionGoalId == goalId);
+        await LockPlanAsync(lease);
+
         await Assert.ThrowsAsync<BadRequestException>(() =>
-            handler.Handle(new DeleteDivisionKpiCommandRequest { DivisionKpiId = kpi.Id }, CancellationToken.None));
+            CreateDeleteKpiHandler(lease).Handle(
+                new DeleteDivisionKpiCommandRequest { DivisionKpiId = kpi.Id }, CancellationToken.None));
     }
 
     // ── Plan context by scorecard ─────────────────────────────────────────
@@ -955,6 +1016,121 @@ public class DivisionPlanMutationHandlerTests
         Assert.Empty(response.Data!.Contributions);
         Assert.False(await lease.Context.DivisionGoals.IgnoreQueryFilters().AnyAsync(g => g.Id == goalId && g.IsDeleted));
         Assert.False(await lease.Context.Kpis.IgnoreQueryFilters().AnyAsync(k => k.Id == kpiId && k.IsDeleted));
+    }
+
+    [Fact]
+    public async Task SetContributions_FinalizedPlan_ChangedSelectionStaysFinalized()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        await CreateGoalWithKpiAsync(lease, fixture);
+        await FinalizePlanAsync(lease);
+
+        var response = await CreateContributionsHandler(lease).Handle(
+            new SetDivisionContributionsCommandRequest
+            {
+                DivisionId = divisionId,
+                ScorecardId = fixture.ScorecardId,
+                GoalIds = new List<Guid> { fixture.GoalAId, fixture.GoalBId }
+            }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        // FR-907 constrains the weight sum and dependent data; it does not require the plan
+        // to reopen. Keeping it finalized preserves Data Input Users' entry access, and the
+        // finalization audit trail stays intact.
+        var plan = await lease.Context.DivisionPlans.SingleAsync();
+        Assert.Equal(DivisionPlanStatus.Finalized, plan.PlanStatus);
+        Assert.NotNull(plan.FinalizedAtUtc);
+        Assert.Equal(userId, plan.FinalizedByUserId);
+        // Existing division goals and KPIs survive the contribution change.
+        Assert.Equal(1, await lease.Context.DivisionGoals.CountAsync());
+        Assert.Equal(1, await lease.Context.Kpis.CountAsync(k => k.DivisionGoalId != null));
+    }
+
+    [Fact]
+    public async Task SetContributions_FinalizedPlan_UnchangedSelectionStaysFinalized()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+        await FinalizePlanAsync(lease);
+
+        await CreateContributionsHandler(lease).Handle(
+            new SetDivisionContributionsCommandRequest
+            {
+                DivisionId = divisionId,
+                ScorecardId = fixture.ScorecardId,
+                GoalIds = new List<Guid> { fixture.GoalAId }
+            }, CancellationToken.None);
+
+        var plan = await lease.Context.DivisionPlans.SingleAsync();
+        Assert.Equal(DivisionPlanStatus.Finalized, plan.PlanStatus);
+        Assert.NotNull(plan.FinalizedAtUtc);
+    }
+
+    [Fact]
+    public async Task SetContributions_LockedPlan_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        await CreatePlanWithContributionsAsync(lease, fixture);
+
+        var plan = await lease.Context.DivisionPlans.SingleAsync();
+        plan.PlanStatus = DivisionPlanStatus.Locked;
+        await lease.Context.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            CreateContributionsHandler(lease).Handle(
+                new SetDivisionContributionsCommandRequest
+                {
+                    DivisionId = divisionId,
+                    ScorecardId = fixture.ScorecardId,
+                    GoalIds = new List<Guid> { fixture.GoalAId, fixture.GoalBId }
+                }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SetContributions_CascadeWithRecordedActuals_ThrowsBadRequest()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixture(lease);
+        var handler = CreateContributionsHandler(lease);
+
+        await handler.Handle(new SetDivisionContributionsCommandRequest
+        {
+            DivisionId = divisionId,
+            ScorecardId = fixture.ScorecardId,
+            GoalIds = new List<Guid> { fixture.GoalAId, fixture.GoalBId }
+        }, CancellationToken.None);
+
+        var goalId = await CreateGoalWithKpiAsync(lease, fixture);
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.DivisionGoalId == goalId);
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = fixture.PeriodId,
+            Value = 4,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = DateTime.UtcNow
+        });
+        await lease.Context.SaveChangesAsync();
+
+        // FR-907: removing the corporate goal must never erase KPIs that already carry
+        // recorded performance, even when the caller asks to cascade the removal.
+        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+            handler.Handle(new SetDivisionContributionsCommandRequest
+            {
+                DivisionId = divisionId,
+                ScorecardId = fixture.ScorecardId,
+                GoalIds = new List<Guid> { fixture.GoalBId },
+                CascadeRemoveDependents = true
+            }, CancellationToken.None));
+
+        Assert.Contains("actual performance data", ex.Message);
+        Assert.False(await lease.Context.DivisionGoals.IgnoreQueryFilters().AnyAsync(g => g.Id == goalId && g.IsDeleted));
+        Assert.False(await lease.Context.Kpis.IgnoreQueryFilters().AnyAsync(k => k.Id == kpi.Id && k.IsDeleted));
     }
 
     [Fact]

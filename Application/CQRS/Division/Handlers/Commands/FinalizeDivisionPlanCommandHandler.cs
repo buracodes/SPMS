@@ -119,6 +119,15 @@ namespace Application.CQRS.Division.Handlers.Commands
                     $"Division goal weights must total 100% before finalizing (currently {totalGoalWeight:F2}%).");
             }
 
+            // Every goal must carry a positive weight; a zero/negative goal would either be
+            // silently excluded or distort the normalized score.
+            var invalidGoalWeight = plan.Goals.FirstOrDefault(g => g.Weight <= 0m || g.Weight > 100m);
+            if (invalidGoalWeight != null)
+            {
+                throw new BadRequestException(
+                    $"The division goal '{invalidGoalWeight.Name}' must have a weight greater than 0% and no more than 100%.");
+            }
+
             var totalKpis = plan.Goals.Sum(g => g.Kpis.Count);
             if (totalKpis == 0)
             {
@@ -130,6 +139,14 @@ namespace Application.CQRS.Division.Handlers.Commands
             {
                 throw new BadRequestException(
                     $"Add at least one KPI to the division goal '{goalWithoutKpis.Name}' before finalizing this plan.");
+            }
+
+            var invalidKpiWeightGoal = plan.Goals.FirstOrDefault(
+                g => g.Kpis.Any(k => k.Weight <= 0m || k.Weight > 100m));
+            if (invalidKpiWeightGoal != null)
+            {
+                throw new BadRequestException(
+                    $"Every KPI under the division goal '{invalidKpiWeightGoal.Name}' must have a weight greater than 0% and no more than 100%.");
             }
 
             var incompleteKpiWeightGoal = plan.Goals.FirstOrDefault(

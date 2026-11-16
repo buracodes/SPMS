@@ -66,6 +66,35 @@ namespace API.Controllers
             return Ok(result);
         }
 
+        /// <summary>
+        /// Planning context for the Division Planning workspace. The shared by-scorecard read
+        /// also serves Data Entry, so it keeps the broader read policy; planning needs the
+        /// available corporate goals and is restricted to the planning capability itself.
+        /// </summary>
+        [HttpGet("planning/context")]
+        [Authorize(Policy = Permissions.DivisionPlan)]
+        public async Task<ActionResult> GetPlanningContext(
+            [FromQuery] Guid scorecardId,
+            [FromQuery] Guid? divisionId = null,
+            [FromQuery] PeriodType? periodType = null,
+            [FromQuery] int? quarter = null,
+            [FromQuery] int? fromMonth = null,
+            [FromQuery] int? toMonth = null,
+            [FromQuery] int? year = null)
+        {
+            var result = await mediator.Send(new GetDivisionPlanContextQueryRequest
+            {
+                ScorecardId = scorecardId,
+                DivisionId = divisionId,
+                PeriodType = periodType,
+                Quarter = quarter,
+                FromMonth = fromMonth,
+                ToMonth = toMonth,
+                Year = year
+            });
+            return Ok(result);
+        }
+
         [HttpGet("plans/by-scorecard/{scorecardId:guid}")]
         [Authorize(Policy = AnyPermissionPolicyNames.DivisionRead)]
         public async Task<ActionResult> GetPlanContextByScorecard(

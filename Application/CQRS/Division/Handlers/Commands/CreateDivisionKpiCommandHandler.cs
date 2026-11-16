@@ -63,9 +63,9 @@ namespace Application.CQRS.Division.Handlers.Commands
                 throw new BadRequestException("Create the division plan before adding division KPIs.");
             }
 
-            if (plan.PlanStatus != DivisionPlanStatus.Draft)
+            if (plan.PlanStatus == DivisionPlanStatus.Locked)
             {
-                throw new BadRequestException("Division KPIs cannot be added once the plan has been finalized or locked.");
+                throw new BadRequestException("Division KPIs cannot be added once the plan is locked.");
             }
 
             var divisionGoal = await divisionGoalRepository.GetById(request.DivisionGoalId);
@@ -81,6 +81,11 @@ namespace Application.CQRS.Division.Handlers.Commands
             }
 
             var validPeriods = await fiscalPeriodRepository.GetByFiscalYearAsync(scorecard.FiscalYearId);
+
+            if (request.Weight <= 0m || request.Weight > 100m)
+            {
+                throw new BadRequestException("Division KPI weight must be greater than 0% and cannot exceed 100%.");
+            }
 
             // ADR-009: the KPI weight budget is checked with the insert in one serializable
             // transaction, so two concurrent creates under the same goal cannot jointly

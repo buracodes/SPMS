@@ -36,10 +36,11 @@ public interface IOrganizationalScopeService
 
     /// <summary>
     /// True when the principal may browse the division portfolio (division list, corporate
-    /// goals in a division plan, division report). Corporate roles qualify through
-    /// <c>performance:monitor.view</c>; read-only corporate roles (View Only) qualify through
-    /// <c>divisions:view</c>. A principal with a division claim is always limited to its own
-    /// division, so this returns false for division accounts.
+    /// goals in a division plan, division report). Corporate roles qualify through the live
+    /// <c>performance:monitor.view</c> grant even when their HR record also carries a division
+    /// claim; read-only corporate roles (View Only) qualify through <c>divisions:view</c>. A
+    /// principal with a division claim and no monitoring right stays limited to its own
+    /// division.
     /// </summary>
     Task<bool> HasDivisionPortfolioAccessAsync(CancellationToken cancellationToken = default);
 

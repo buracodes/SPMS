@@ -45,8 +45,8 @@ namespace Application.CQRS.Division.Handlers.Commands
 
             await organizationalScope.EnsureDivisionAsync(plan.DivisionId, cancellationToken);
 
-            if (plan.PlanStatus != DivisionPlanStatus.Draft)
-                throw new BadRequestException("Division goals cannot be edited once the plan has been finalized or locked.");
+            if (plan.PlanStatus == DivisionPlanStatus.Locked)
+                throw new BadRequestException("Division goals cannot be edited once the plan is locked.");
 
             if (request.ParentGoalId.HasValue && request.ParentGoalId.Value != goal.ParentGoalId)
             {
@@ -67,6 +67,9 @@ namespace Application.CQRS.Division.Handlers.Commands
 
             if (request.Weight.HasValue && request.Weight.Value != goal.Weight)
             {
+                if (request.Weight.Value <= 0m || request.Weight.Value > 100m)
+                    throw new BadRequestException("Division goal weight must be greater than 0% and cannot exceed 100%.");
+
                 var otherWeight = await divisionGoalRepository.GetWeightsSumAsync(plan.Id, goal.Id);
                 if (otherWeight + request.Weight.Value > 100m)
                     throw new BadRequestException(

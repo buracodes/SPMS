@@ -14,7 +14,9 @@ namespace Application.Tests.Kpis;
 /// <summary>
 /// The Data Entry board read: a division account receives only the corporate KPIs its own
 /// division (or the employee personally) reports on, so another division's numbers never
-/// reach the page, and a KPI of a division plan stays on the division board.
+/// reach the page, and a KPI of a division plan stays on the division board. A principal
+/// who owns a corporate KPI personally receives it without a division claim; corporate data
+/// is never a fallback, so an account with neither receives no rows.
 /// </summary>
 public class EntryBoardQueryHandlerTests
 {
@@ -235,7 +237,29 @@ public class EntryBoardQueryHandlerTests
     }
 
     [Fact]
-    public async Task AccountWithoutDivisionOrCorporateAccess_ReceivesEmptyBoard()
+    public async Task CorporateKpiAssignee_WithoutDivisionClaim_ReceivesOnlySelfOwnedKpi()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+        var scope = new TestOrganizationalScopeService
+        {
+            UserId = entryUserId,
+            HasCorporateAccess = false,
+        };
+
+        var response = await CreateHandler(lease, scope)
+            .Handle(new GetEntryBoardQueryRequest { FiscalYearId = fixture.FiscalYearId }, CancellationToken.None);
+
+        // Personal KPI ownership is enough to report on the corporate board; every division
+        // KPI, a colleague's KPI, an unassigned KPI and a plan KPI stay out.
+        var kpi = Assert.Single(response.Data!.Kpis);
+        Assert.Equal(fixture.SelfOwnedKpiId, kpi.Id);
+        Assert.Single(response.Data.Scorecards);
+        Assert.Equal(fixture.CorporateScorecardId, response.Data.Scorecards[0].Id);
+    }
+
+    [Fact]
+    public async Task AccountWithoutDivisionOrCorporateAccess_ReceivesNoBoard()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateFixtureAsync(lease);
@@ -248,6 +272,8 @@ public class EntryBoardQueryHandlerTests
         var response = await CreateHandler(lease, scope)
             .Handle(new GetEntryBoardQueryRequest { FiscalYearId = fixture.FiscalYearId }, CancellationToken.None);
 
+        // Corporate goals, KRAs and KPIs require corporate visibility; an unassigned
+        // ordinary account gets an empty board instead of a read-only corporate view.
         Assert.True(response.Success);
         Assert.Empty(response.Data!.Kpis);
         Assert.Empty(response.Data.Scorecards);

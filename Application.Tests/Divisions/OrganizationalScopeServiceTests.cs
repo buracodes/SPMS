@@ -82,7 +82,7 @@ public class OrganizationalScopeServiceTests
     }
 
     [Fact]
-    public async Task GroupGrantedPortfolioRights_DoNotWidenDivisionPrincipal()
+    public async Task GroupGrantedDivisionView_DoesNotWidenDivisionPrincipal()
     {
         var currentUser = new TestCurrentUserService
         {
@@ -91,7 +91,44 @@ public class OrganizationalScopeServiceTests
         };
         var effective = new TestEffectivePermissionService();
         effective.Grant(userId, Permissions.DivisionView);
+        var scope = new OrganizationalScopeService(currentUser, effective);
+
+        Assert.False(await scope.HasDivisionPortfolioAccessAsync());
+        await Assert.ThrowsAsync<ForbiddenException>(
+            () => scope.EnsureDivisionAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task LiveMonitoringGrant_WidensClaimedPrincipalToPortfolioRead()
+    {
+        // Admin/Power User accounts also carry an HR division claim; the live
+        // performance:monitor.view grant is evaluated before the division restriction.
+        var claimedDivision = Guid.NewGuid();
+        var otherDivision = Guid.NewGuid();
+        var currentUser = new TestCurrentUserService
+        {
+            UserId = userId,
+            DivisionId = claimedDivision
+        };
+        var effective = new TestEffectivePermissionService();
         effective.Grant(userId, Permissions.PerformanceMonitorView);
+        var scope = new OrganizationalScopeService(currentUser, effective);
+
+        Assert.True(await scope.HasDivisionPortfolioAccessAsync());
+        Assert.True(await scope.CanAccessDivisionAsync(otherDivision));
+        await scope.EnsureDivisionAsync(otherDivision);
+    }
+
+    [Fact]
+    public async Task RevokedMonitoringGrant_WithStaleJwtClaim_KeepsDivisionRestriction()
+    {
+        var currentUser = new TestCurrentUserService
+        {
+            UserId = userId,
+            DivisionId = Guid.NewGuid(),
+            Permissions = new[] { Permissions.PerformanceMonitorView }
+        };
+        var effective = new TestEffectivePermissionService();
         var scope = new OrganizationalScopeService(currentUser, effective);
 
         Assert.False(await scope.HasDivisionPortfolioAccessAsync());
@@ -160,7 +197,7 @@ public class OrganizationalScopeServiceTests
     }
 
     [Fact]
-    public async Task BroadReadGrant_WithSingleDivisionScope_DoesNotWidenToSiblingDivision()
+    public async Task DivisionViewGrant_WithSingleDivisionScope_DoesNotWidenToSiblingDivision()
     {
         var divisionA = Guid.NewGuid();
         var sibling = Guid.NewGuid();
@@ -171,7 +208,6 @@ public class OrganizationalScopeServiceTests
         };
         var effective = new TestEffectivePermissionService();
         effective.Grant(userId, Permissions.DivisionView);
-        effective.Grant(userId, Permissions.PerformanceMonitorView);
         var scope = new OrganizationalScopeService(currentUser, effective);
 
         Assert.True(await scope.CanAccessDivisionAsync(divisionA));

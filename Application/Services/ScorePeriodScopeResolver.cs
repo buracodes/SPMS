@@ -45,15 +45,10 @@ internal static class ScorePeriodScopeResolver
         if (now < fy.StartDate.Date) return 0;
         if (now > fy.EndDate.Date) return 12;
 
-        var startMonth = fy.StartDate.Month;
-        var currentMonth = now.Month;
-        var startYear = fy.StartDate.Year;
-        var currentYear = now.Year;
-
-        int fiscalMonth = currentYear == startYear
-            ? ((currentMonth - startMonth + 12) % 12) + 1
-            : 12 + ((currentMonth - startMonth + 12) % 12) + 1;
-
-        return Math.Min(fiscalMonth, 12);
+        // Same month arithmetic as FiscalCalendarService.GetFiscalMonth: fiscal years start on
+        // the first of a month, so a simple month offset is exact across a calendar-year
+        // boundary (e.g. FY starting July: February is fiscal month 8, not 12).
+        var monthOffset = (now.Year - fy.StartDate.Year) * 12 + now.Month - fy.StartDate.Month;
+        return Math.Clamp(monthOffset + 1, 1, 12);
     }
 }

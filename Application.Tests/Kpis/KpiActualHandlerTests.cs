@@ -9,6 +9,7 @@ using Application.Jobs;
 using Application.Services;
 using Application.Tests.TestSupport;
 using Application.Validation.KpiActual;
+using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
 using Infrastructure.Persistence.Repositories;
@@ -50,29 +51,37 @@ public class KpiActualHandlerTests
         return (fiscalYear.Id, scorecard.Id, kra.Id, kpi.Id);
     }
 
-    private static (EnterActualValueCommandHandler enter, GetActualValuesQueryHandler get, GetActualValueHistoryQueryHandler history) CreateHandlers(TestDbContextLease lease, ICurrentUserService? currentUserService = null)
+    private static (EnterActualValueCommandHandler enter, GetActualValuesQueryHandler get, GetActualValueHistoryQueryHandler history) CreateHandlers(
+        TestDbContextLease lease,
+        ICurrentUserService? currentUserService = null,
+        IEffectivePermissionService? effectivePermissionService = null)
     {
+        var user = currentUserService ?? new TestCurrentUserService();
+        var effective = effectivePermissionService ?? new TestEffectivePermissionService();
+        var organizationalScope = new OrganizationalScopeService(user, effective);
         var actualRepo = new KpiActualValueRepository(lease.Context);
         return (
             new EnterActualValueCommandHandler(
                 new KpiRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
                 actualRepo,
-                currentUserService ?? new TestCurrentUserService(),
+                user,
                 new TestSpmsJobScheduler(),
                 new AuditContext(),
-                new TestEffectivePermissionService()),
+                effective),
             new GetActualValuesQueryHandler(
                 new KpiRepository(lease.Context),
                 new FiscalYearRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
                 actualRepo,
-                currentUserService ?? new TestCurrentUserService()),
+                user,
+                organizationalScope),
             new GetActualValueHistoryQueryHandler(
                 new KpiRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
                 actualRepo,
-                currentUserService ?? new TestCurrentUserService()));
+                user,
+                organizationalScope));
     }
 
     [Fact]
@@ -450,4 +459,217 @@ public class KpiActualHandlerTests
         await Assert.ThrowsAsync<ForbiddenException>(() =>
             history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None));
     }
+
+    // ── Organization-wide authority precedes division ownership ───────────────
+
+    private static readonly string[] AdminLivePermissions =
+    {
+        Permissions.PerformanceMonitorView, Permissions.ScorecardView, Permissions.ScorecardCreate,
+        Permissions.ScorecardEdit, Permissions.ScorecardClose, Permissions.ActualsView,
+        Permissions.ActualsEnter, Permissions.ActualsOverride, Permissions.DivisionView,
+        Permissions.DivisionManage, Permissions.DivisionPlan, Permissions.DivisionActualsEnter
+    };
+
+    private static readonly string[] PowerUserLivePermissions =
+    {
+        Permissions.PerformanceMonitorView, Permissions.ScorecardView, Permissions.ScorecardCreate,
+        Permissions.ScorecardEdit, Permissions.ActualsView, Permissions.ActualsEnter,
+        Permissions.ActualsOverride, Permissions.DivisionView, Permissions.DivisionPlan,
+        Permissions.DivisionActualsEnter
+    };
+
+    private static readonly string[] ExecutiveLivePermissions =
+    {
+        Permissions.PerformanceMonitorView, Permissions.ScorecardView, Permissions.ActualsView,
+        Permissions.DivisionView, Permissions.ReportsView
+    };
+
+    private static readonly string[] DataInputLivePermissions =
+    {
+        Permissions.ActualsView, Permissions.ActualsEnter, Permissions.DivisionActualsEnter,
+        Permissions.DataUpload, Permissions.DataValidate
+    };
+
+    private static readonly string[] ViewOnlyLivePermissions =
+    {
+        Permissions.ScorecardView, Permissions.ActualsView, Permissions.DivisionView,
+        Permissions.ReportsView
+    };
+
+    private static TestEffectivePermissionService LiveGrants(Guid userId, params string[] permissions)
+    {
+        var service = new TestEffectivePermissionService();
+        foreach (var permission in permissions)
+        {
+            service.Grant(userId, permission);
+        }
+
+        return service;
+    }
+
+    private static TestCurrentUserService DivisionClaimedUser(
+        Guid userId, Guid divisionId, params string[] jwtPermissions)
+        => new()
+        {
+            UserId = userId,
+            DivisionId = divisionId,
+            Permissions = jwtPermissions
+        };
+
+    /// <summary>
+    /// A KPI on the corporate scorecard owned by a division the caller does not belong to.
+    /// </summary>
+    private static async Task<(Guid fiscalYearId, Guid kpiId, Guid periodId)> MakeForeignDivisionKpiAsync(
+        TestDbContextLease lease, Guid recordedBy)
+    {
+        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+
+        var ownerDivision = new Division { Id = Guid.NewGuid(), Name = "Operations", Code = "OPS" };
+        lease.Context.Divisions.Add(ownerDivision);
+        lease.Context.Users.Add(new User
+        {
+            Id = recordedBy,
+            Username = $"claimed.{recordedBy:N}",
+            FullName = "Division Claimed User"
+        });
+
+        var kpi = await lease.Context.Kpis.SingleAsync(k => k.Id == kpiId);
+        kpi.DivisionOwnerId = ownerDivision.Id;
+        await lease.Context.SaveChangesAsync();
+
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+        return (fiscalYearId, kpiId, period.Id);
+    }
+
+    private static async Task AssertForeignDivisionReadAllowedAsync(string[] livePermissions)
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var userId = Guid.NewGuid();
+        var (fiscalYearId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
+
+        var user = DivisionClaimedUser(userId, Guid.NewGuid(), livePermissions);
+        var live = LiveGrants(userId, livePermissions);
+        var (_, get, history) = CreateHandlers(lease, user, live);
+
+        var response = await get.Handle(
+            new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId },
+            CancellationToken.None);
+        Assert.True(response.Success);
+
+        var historyResponse = await history.Handle(
+            new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = periodId },
+            CancellationToken.None);
+        Assert.True(historyResponse.Success);
+    }
+
+    private static async Task AssertForeignDivisionReadForbiddenAsync(string[] livePermissions)
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var userId = Guid.NewGuid();
+        var (fiscalYearId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
+
+        var user = DivisionClaimedUser(userId, Guid.NewGuid(), livePermissions);
+        var live = LiveGrants(userId, livePermissions);
+        var (_, get, history) = CreateHandlers(lease, user, live);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            get.Handle(
+                new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId },
+                CancellationToken.None));
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            history.Handle(
+                new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = periodId },
+                CancellationToken.None));
+    }
+
+    private static async Task AssertForeignDivisionWriteAsync(string[] livePermissions, bool allowed)
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var userId = Guid.NewGuid();
+        var (_, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
+
+        var user = DivisionClaimedUser(userId, Guid.NewGuid(), livePermissions);
+        var live = LiveGrants(userId, livePermissions);
+        var (enter, _, _) = CreateHandlers(lease, user, live);
+
+        var request = new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = periodId, Value = 12 }
+        };
+
+        if (allowed)
+        {
+            var response = await enter.Handle(request, CancellationToken.None);
+            Assert.True(response.Success);
+            Assert.Equal(1, await lease.Context.KpiActualValues.CountAsync());
+            return;
+        }
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => enter.Handle(request, CancellationToken.None));
+        Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
+    }
+
+    [Fact]
+    public Task GetActualValues_AdminWithDivisionClaim_ReadsForeignDivisionKpi()
+        => AssertForeignDivisionReadAllowedAsync(AdminLivePermissions);
+
+    [Fact]
+    public Task GetActualValues_PowerUserWithDivisionClaim_ReadsForeignDivisionKpi()
+        => AssertForeignDivisionReadAllowedAsync(PowerUserLivePermissions);
+
+    [Fact]
+    public Task GetActualValues_ExecutiveWithDivisionClaim_ReadsForeignDivisionKpi()
+        => AssertForeignDivisionReadAllowedAsync(ExecutiveLivePermissions);
+
+    [Fact]
+    public Task GetActualValues_DataInputWithDivisionClaim_ForeignDivisionKpi_ThrowsForbidden()
+        => AssertForeignDivisionReadForbiddenAsync(DataInputLivePermissions);
+
+    [Fact]
+    public Task GetActualValues_ViewOnlyWithDivisionClaim_ForeignDivisionKpi_ThrowsForbidden()
+        => AssertForeignDivisionReadForbiddenAsync(ViewOnlyLivePermissions);
+
+    [Fact]
+    public async Task GetActualValues_RevokedMonitoringGrant_WithStaleJwtClaim_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var userId = Guid.NewGuid();
+        var (fiscalYearId, kpiId, _) = await MakeForeignDivisionKpiAsync(lease, userId);
+
+        // The JWT still carries performance:monitor.view, but the live grant was revoked.
+        var user = DivisionClaimedUser(
+            userId,
+            Guid.NewGuid(),
+            Permissions.PerformanceMonitorView,
+            Permissions.ActualsView,
+            Permissions.ActualsOverride);
+        var live = LiveGrants(userId, Permissions.ActualsView);
+        var (_, get, _) = CreateHandlers(lease, user, live);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            get.Handle(
+                new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId },
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public Task EnterActualValue_PowerUserWithDivisionClaim_ForeignKpi_WithLiveOverride_Succeeds()
+        => AssertForeignDivisionWriteAsync(PowerUserLivePermissions, allowed: true);
+
+    [Fact]
+    public Task EnterActualValue_AdminWithDivisionClaim_ForeignKpi_WithLiveOverride_Succeeds()
+        => AssertForeignDivisionWriteAsync(AdminLivePermissions, allowed: true);
+
+    [Fact]
+    public Task EnterActualValue_DataInputWithDivisionClaim_ForeignKpi_ThrowsForbidden()
+        => AssertForeignDivisionWriteAsync(DataInputLivePermissions, allowed: false);
+
+    [Fact]
+    public Task EnterActualValue_ExecutiveWithDivisionClaim_ForeignKpi_ThrowsForbidden()
+        => AssertForeignDivisionWriteAsync(ExecutiveLivePermissions, allowed: false);
+
+    [Fact]
+    public Task EnterActualValue_ViewOnlyWithDivisionClaim_ForeignKpi_ThrowsForbidden()
+        => AssertForeignDivisionWriteAsync(ViewOnlyLivePermissions, allowed: false);
 }

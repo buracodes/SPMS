@@ -60,19 +60,20 @@ public class OrganizationalScopeService : IOrganizationalScopeService
             return false;
         }
 
-        // The division scope is authoritative and always wins: division accounts only ever
-        // see their authorized divisions, even if a broad read permission is also granted.
-        if (HasDivisionScope)
-        {
-            return false;
-        }
-
+        // Explicitly authorized organization-wide visibility is evaluated first: Admin and
+        // Power User accounts also carry an HR division claim, but their portfolio rights are
+        // not narrowed by it. The division scope only fences principals without that right.
         if (await effectivePermissions.HasPermissionAsync(
                 userId.Value,
                 Permissions.PerformanceMonitorView,
                 cancellationToken))
         {
             return true;
+        }
+
+        if (HasDivisionScope)
+        {
+            return false;
         }
 
         // FR-908 / Module 9 matrix: View Only roles can select a division and read the

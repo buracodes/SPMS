@@ -7,6 +7,7 @@ using Application.Exceptions;
 using Application.Interface.IService;
 using Application.Services;
 using Application.Tests.TestSupport;
+using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
 using Infrastructure.Persistence.Repositories;
@@ -108,7 +109,10 @@ public class DivisionActualsHandlerTests
     }
 
     private static EnterDivisionActualValueCommandHandler CreateEnterHandler(
-        TestDbContextLease lease, ICurrentUserService currentUserService, IAuditContext? auditContext = null)
+        TestDbContextLease lease,
+        ICurrentUserService currentUserService,
+        IAuditContext? auditContext = null,
+        IEffectivePermissionService? effectivePermissionService = null)
         => new(
             new DivisionRepository(lease.Context),
             new DivisionPlanRepository(lease.Context),
@@ -117,18 +121,21 @@ public class DivisionActualsHandlerTests
             new FiscalPeriodRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
             currentUserService,
+            effectivePermissionService ?? new TestEffectivePermissionService(),
             new TestSpmsJobScheduler(),
             auditContext ?? new AuditContext());
 
     private static GetDivisionActualValuesQueryHandler CreateGetHandler(
-        TestDbContextLease lease, ICurrentUserService currentUserService)
+        TestDbContextLease lease,
+        ICurrentUserService currentUserService,
+        IOrganizationalScopeService? organizationalScope = null)
         => new(
             new DivisionRepository(lease.Context),
             new DivisionPlanRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
-            ResolveScope(currentUserService));
+            organizationalScope ?? ResolveScope(currentUserService));
 
     /// <summary>
     /// Mirrors the production rule for these fixtures: a principal with a division claim is
@@ -179,7 +186,7 @@ public class DivisionActualsHandlerTests
 
         var handler = CreateEnterHandler(lease, new TestCurrentUserService { UserId = fixture.CorporateUserId });
 
-        var ex = await Assert.ThrowsAsync<BadRequestException>(() =>
+        var error = await Assert.ThrowsAsync<BadRequestException>(() =>
             handler.Handle(new EnterDivisionActualValueCommandRequest
             {
                 Dto = new EnterDivisionActualValueDto
@@ -191,7 +198,7 @@ public class DivisionActualsHandlerTests
                 }
             }, CancellationToken.None));
 
-        Assert.Contains("draft", ex.Message);
+        Assert.Contains("finalized", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
     }
 
@@ -619,5 +626,191 @@ public class DivisionActualsHandlerTests
                     Value = 4
                 }
             }, CancellationToken.None));
+    }
+
+    // ── Organization-wide actuals authority precedes division ownership ──────
+
+    private static TestCurrentUserService ClaimedUser(
+        Guid userId, Guid divisionId, params string[] jwtPermissions)
+        => new()
+        {
+            UserId = userId,
+            DivisionId = divisionId,
+            Permissions = jwtPermissions
+        };
+
+    private static TestEffectivePermissionService LiveGrants(Guid userId, params string[] permissions)
+    {
+        var service = new TestEffectivePermissionService();
+        foreach (var permission in permissions)
+        {
+            service.Grant(userId, permission);
+        }
+
+        return service;
+    }
+
+    [Fact]
+    public async Task EnterValue_ClaimedPowerUserOtherDivision_WithLiveOverride_Succeeds()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+
+        var userId = fixture.DivisionAccountUserId;
+        var account = ClaimedUser(
+            userId,
+            fixture.DivisionBId,
+            Permissions.DivisionActualsEnter,
+            Permissions.ActualsEnter,
+            Permissions.ActualsOverride);
+        var live = LiveGrants(
+            userId,
+            Permissions.PerformanceMonitorView,
+            Permissions.DivisionActualsEnter,
+            Permissions.ActualsEnter,
+            Permissions.ActualsOverride);
+
+        var response = await CreateEnterHandler(lease, account, effectivePermissionService: live)
+            .Handle(new EnterDivisionActualValueCommandRequest
+            {
+                Dto = new EnterDivisionActualValueDto
+                {
+                    DivisionId = fixture.DivisionAId,
+                    KpiId = fixture.KpiId,
+                    FiscalPeriodId = fixture.PeriodId,
+                    Value = 21
+                }
+            }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(21, response.Data!.Value);
+        Assert.Equal(1, await lease.Context.KpiActualValues.CountAsync());
+    }
+
+    [Fact]
+    public async Task EnterValue_ClaimedDataInputOtherDivision_WithEntryRights_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+
+        var userId = fixture.DivisionAccountUserId;
+        var account = ClaimedUser(
+            userId,
+            fixture.DivisionBId,
+            Permissions.DivisionActualsEnter,
+            Permissions.ActualsEnter);
+        // Group-granted entry rights never widen a division employee with no override right.
+        var live = LiveGrants(
+            userId,
+            Permissions.DivisionActualsEnter,
+            Permissions.ActualsEnter);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            CreateEnterHandler(lease, account, effectivePermissionService: live)
+                .Handle(new EnterDivisionActualValueCommandRequest
+                {
+                    Dto = new EnterDivisionActualValueDto
+                    {
+                        DivisionId = fixture.DivisionAId,
+                        KpiId = fixture.KpiId,
+                        FiscalPeriodId = fixture.PeriodId,
+                        Value = 21
+                    }
+                }, CancellationToken.None));
+
+        Assert.Equal(0, await lease.Context.KpiActualValues.CountAsync());
+    }
+
+    [Fact]
+    public async Task EnterValue_ClaimedPowerUserOtherDivision_AfterOverrideRevoked_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+
+        var userId = fixture.DivisionAccountUserId;
+        var account = ClaimedUser(
+            userId,
+            fixture.DivisionBId,
+            Permissions.DivisionActualsEnter,
+            Permissions.ActualsEnter,
+            Permissions.ActualsOverride);
+
+        // The JWT still claims the override right, but the live grant is gone.
+        var live = LiveGrants(userId, Permissions.DivisionActualsEnter, Permissions.ActualsEnter);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            CreateEnterHandler(lease, account, effectivePermissionService: live)
+                .Handle(new EnterDivisionActualValueCommandRequest
+                {
+                    Dto = new EnterDivisionActualValueDto
+                    {
+                        DivisionId = fixture.DivisionAId,
+                        KpiId = fixture.KpiId,
+                        FiscalPeriodId = fixture.PeriodId,
+                        Value = 21,
+                        OverrideReason = "Stale claim must not authorize this write."
+                    }
+                }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetValues_ClaimedPowerUserOtherDivision_WithLiveMonitoringGrant_ReturnsValues()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+
+        var corporate = new TestCurrentUserService { UserId = fixture.CorporateUserId };
+        await CreateEnterHandler(lease, corporate).Handle(new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.DivisionAId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 34
+            }
+        }, CancellationToken.None);
+
+        var userId = Guid.NewGuid();
+        var account = ClaimedUser(
+            userId,
+            fixture.DivisionBId,
+            Permissions.PerformanceMonitorView,
+            Permissions.ActualsView);
+        var live = LiveGrants(userId, Permissions.PerformanceMonitorView, Permissions.ActualsView);
+
+        var response = await CreateGetHandler(lease, account, new OrganizationalScopeService(account, live))
+            .Handle(new GetDivisionActualValuesQueryRequest
+            {
+                DivisionId = fixture.DivisionAId,
+                FiscalYearId = fixture.FiscalYearId
+            }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        var entry = Assert.Single(response.Data!);
+        Assert.Equal(34, entry.Value);
+    }
+
+    [Fact]
+    public async Task GetValues_ClaimedDataInputOtherDivision_WithEntryRights_ThrowsForbidden()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var fixture = await CreateFixtureAsync(lease);
+
+        var userId = Guid.NewGuid();
+        var account = ClaimedUser(
+            userId,
+            fixture.DivisionBId,
+            Permissions.DivisionActualsEnter,
+            Permissions.ActualsView);
+        var live = LiveGrants(userId, Permissions.DivisionActualsEnter, Permissions.ActualsView);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            CreateGetHandler(lease, account, new OrganizationalScopeService(account, live))
+                .Handle(new GetDivisionActualValuesQueryRequest
+                {
+                    DivisionId = fixture.DivisionAId,
+                    FiscalYearId = fixture.FiscalYearId
+                }, CancellationToken.None));
     }
 }

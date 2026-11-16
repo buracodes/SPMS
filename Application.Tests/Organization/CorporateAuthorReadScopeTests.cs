@@ -147,6 +147,15 @@ public class CorporateAuthorReadScopeTests
         HasDivisionPortfolioAccess = false
     };
 
+    /// <summary>An ordinary account with neither a division claim nor corporate visibility.</summary>
+    private static TestOrganizationalScopeService UnassignedOrdinaryAccount() => new()
+    {
+        UserId = Guid.NewGuid(),
+        DivisionIds = Array.Empty<Guid>(),
+        HasCorporateAccess = false,
+        HasDivisionPortfolioAccess = false
+    };
+
     private static TestOrganizationalScopeService CorporateAuthorWithDivisionClaim(Guid divisionId) => new()
     {
         DivisionIds = new[] { divisionId },
@@ -293,6 +302,21 @@ public class CorporateAuthorReadScopeTests
         Assert.Equal(
             new[] { "Clearing", "Trading" },
             response.Data.Select(d => d.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public async Task Divisions_AccountWithoutDivisionOrCorporateAccess_SeesNoDivisions()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        await SeedAsync(lease);
+        var handler = new GetDivisionsQueryHandler(
+            new DivisionRepository(lease.Context),
+            new DivisionPlanRepository(lease.Context),
+            UnassignedOrdinaryAccount());
+
+        var response = await handler.Handle(new GetDivisionsQueryRequest(), CancellationToken.None);
+
+        Assert.Empty(response.Data);
     }
 
     [Fact]

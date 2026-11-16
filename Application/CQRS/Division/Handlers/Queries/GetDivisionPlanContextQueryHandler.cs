@@ -71,16 +71,17 @@ namespace Application.CQRS.Division.Handlers.Queries
 
             var fiscalPeriods = await fiscalPeriodRepository.GetByFiscalYearAsync(scorecard.FiscalYearId);
 
-            var corporateScorecard = scorecardRepository.GetQueryable()
-                .Where(s => s.FiscalYearId == scorecard.FiscalYearId
-                            && s.Scope == ScorecardScope.Corporate
-                            && s.Id != scorecard.Id)
-                .OrderBy(s => s.Name)
-                .FirstOrDefault();
+            // The plan's scorecard is normally the corporate scorecard itself; only the legacy
+            // division-scope layout needs the corporate counterpart. Never substitute another
+            // corporate scorecard's goals when the plan already points at a corporate one.
+            var corporateScorecard = scorecard.Scope == ScorecardScope.Corporate
+                ? scorecard
+                : scorecardRepository.GetQueryable()
+                    .Where(s => s.FiscalYearId == scorecard.FiscalYearId
+                                && s.Scope == ScorecardScope.Corporate)
+                    .OrderBy(s => s.Name)
+                    .FirstOrDefault() ?? scorecard;
 
-            // When the plan scorecard is itself the corporate scorecard (legacy layout),
-            // fall back to its own goals.
-            corporateScorecard ??= scorecard;
             var corporateGoals = await goalRepository.GetByScorecardAsync(corporateScorecard.Id);
 
             var plan = request.DivisionId.HasValue

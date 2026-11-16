@@ -64,9 +64,9 @@ namespace Application.CQRS.Division.Handlers.Commands
                 throw new BadRequestException("Select the corporate goals this division contributes to before creating division goals.");
             }
 
-            if (plan.PlanStatus != DivisionPlanStatus.Draft)
+            if (plan.PlanStatus == DivisionPlanStatus.Locked)
             {
-                throw new BadRequestException("Division goals cannot be added once the plan has been finalized or locked.");
+                throw new BadRequestException("Division goals cannot be added once the plan is locked.");
             }
 
             var parentGoal = await goalRepository.GetById(request.ParentGoalId);
@@ -84,6 +84,11 @@ namespace Application.CQRS.Division.Handlers.Commands
             if (await divisionGoalRepository.ExistsByNameInPlanAsync(plan.Id, request.Name.Trim()))
             {
                 throw new BadRequestException($"A division goal named '{request.Name.Trim()}' already exists in this plan.");
+            }
+
+            if (request.Weight <= 0m || request.Weight > 100m)
+            {
+                throw new BadRequestException("Division goal weight must be greater than 0% and cannot exceed 100%.");
             }
 
             var currentWeightSum = await divisionGoalRepository.GetWeightsSumAsync(plan.Id);

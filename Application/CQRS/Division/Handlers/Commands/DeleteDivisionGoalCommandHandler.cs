@@ -38,8 +38,8 @@ namespace Application.CQRS.Division.Handlers.Commands
                 await organizationalScope.EnsureDivisionAsync(goal.DivisionPlan.DivisionId, cancellationToken);
             }
 
-            if (goal.DivisionPlan == null || goal.DivisionPlan.PlanStatus != DivisionPlanStatus.Draft)
-                throw new BadRequestException("Division goals cannot be deleted once the plan has been finalized or locked.");
+            if (goal.DivisionPlan == null || goal.DivisionPlan.PlanStatus == DivisionPlanStatus.Locked)
+                throw new BadRequestException("Division goals cannot be deleted once the plan is locked.");
 
             var kpiIds = kpiRepository.GetQueryable()
                 .Where(k => k.DivisionGoalId == goal.Id)

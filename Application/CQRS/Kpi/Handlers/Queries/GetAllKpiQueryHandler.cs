@@ -43,16 +43,15 @@ public class GetAllKpiQueryHandler : IRequestHandler<GetAllKpiQueryRequest, Resp
         var filtered = kpis.AsEnumerable();
 
         // Corporate visibility comes from the live authorization state. A principal without
-        // it only sees KPIs owned by its division; one with neither corporate access nor a
-        // division sees nothing (fail closed).
+        // it only sees KPIs owned by its divisions; with no division assignment there is no
+        // corporate fallback, so the catalog stays empty instead of exposing corporate data.
         if (!await organizationalScope.HasCorporateAccessAsync(cancellationToken))
         {
             var divisionIds = organizationalScope.DivisionIds;
-            filtered = divisionIds.Count > 0
-                ? filtered.Where(k =>
-                    (k.OwnerId.HasValue && k.Owner?.DivisionId is Guid ownerDivisionId && divisionIds.Contains(ownerDivisionId)) ||
-                    (k.DivisionOwnerId.HasValue && divisionIds.Contains(k.DivisionOwnerId.Value)))
-                : filtered.Where(_ => false);
+            filtered = filtered.Where(k =>
+                divisionIds.Count > 0 &&
+                ((k.OwnerId.HasValue && k.Owner?.DivisionId is Guid ownerDivisionId && divisionIds.Contains(ownerDivisionId)) ||
+                 (k.DivisionOwnerId.HasValue && divisionIds.Contains(k.DivisionOwnerId.Value))));
         }
 
         if (request.ScorecardId.HasValue)

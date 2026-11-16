@@ -18,11 +18,11 @@ namespace Application.Tests.Calculation;
 public class PeriodScoreAggregationTests
 {
     private static (ScorePeriodCalculationService Score, DivisionPeriodCalculationService Division) CreateEngines(
-        TestDbContextLease lease)
+        TestDbContextLease lease, TestBusinessClock? clock = null)
     {
         var context = lease.Context;
         var factory = new ScoreStrategyFactory();
-        var clock = TestBusinessClock.Real();
+        clock ??= TestBusinessClock.Real();
 
         var score = new ScorePeriodCalculationService(
             new ScorecardRepository(context),
@@ -200,6 +200,29 @@ public class PeriodScoreAggregationTests
     }
 
     [Fact]
+    public async Task Ytd_crossing_the_calendar_year_stops_at_the_current_fiscal_month()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        // Fiscal year starts 1 July: February 2027 is fiscal month 8, not month 12.
+        var year = await SeedYearAsync(lease);
+        var (scorecard, kpi) = await SeedCorporateKpiAsync(lease, year, KpiOptimizationType.Maximize, true);
+        await SeedValuesAsync(
+            lease, year, kpi.Id,
+            new Dictionary<int, decimal> { [8] = 100 },
+            new Dictionary<int, decimal> { [8] = 50, [9] = 100 });
+
+        var (score, _) = CreateEngines(
+            lease, TestBusinessClock.On(new DateTime(2027, 2, 10, 0, 0, 0, DateTimeKind.Utc)));
+        var result = await score.CalculateAsync(scorecard.Id, year.Id, PeriodType.Ytd, null, null, null, null);
+        var period = result.Kpis[kpi.Id];
+
+        Assert.Equal(8, result.Scope.ToMonth);
+        // The later month is outside YTD, so its actual must not be summed into the period.
+        Assert.Equal(50m, period.PeriodActual);
+        Assert.Equal(50m, period.PeriodScore);
+    }
+
+    [Fact]
     public async Task Quarter_minimize_non_cumulative_averages_monthly_scores()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
@@ -316,5 +339,49 @@ public class PeriodScoreAggregationTests
         var result = await division.CalculateAsync(plan.Id, scorecard.Id, year.Id, PeriodType.Quarter, 1, null, null, null);
 
         Assert.Equal(125m, result.Kpis[kpi.Id].PeriodScore);
+    }
+
+    [Fact]
+    public async Task Division_leading_kpis_stay_informational_and_do_not_change_scores()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var (scorecard, _) = await SeedCorporateKpiAsync(lease, year, KpiOptimizationType.Maximize, true);
+        var (plan, lagging) = await SeedDivisionKpiAsync(lease, scorecard.Id, KpiOptimizationType.Maximize, true);
+        lagging.Weight = 50;
+
+        var leading = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            DivisionGoalId = lagging.DivisionGoalId,
+            Name = "Operations leading KPI",
+            Weight = 50,
+            Unit = "units",
+            IsActive = true,
+            IsCumulative = true,
+            OptimizationType = KpiOptimizationType.Maximize,
+            KpiType = KpiType.Leading
+        };
+        lease.Context.Add(leading);
+
+        await SeedValuesAsync(
+            lease, year, lagging.Id,
+            new Dictionary<int, decimal> { [1] = 100 },
+            new Dictionary<int, decimal> { [1] = 100 },
+            quarterlyTarget: 100);
+        await SeedValuesAsync(
+            lease, year, leading.Id,
+            new Dictionary<int, decimal> { [1] = 100 },
+            new Dictionary<int, decimal> { [1] = 0 },
+            quarterlyTarget: 100);
+
+        var (_, division) = CreateEngines(lease);
+        var result = await division.CalculateAsync(plan.Id, scorecard.Id, year.Id, PeriodType.Quarter, 1, null, null, null);
+
+        // FR: only Lagging KPIs contribute; the Leading KPI keeps its own displayed score.
+        Assert.Equal(0m, result.Kpis[leading.Id].PeriodScore);
+        Assert.Equal(100m, result.DivisionGoals[lagging.DivisionGoalId!.Value].PeriodScore);
+        Assert.Equal(100m, result.OverallScore);
     }
 }

@@ -53,8 +53,8 @@ namespace Application.CQRS.Division.Handlers.Commands
             var goal = await divisionGoalRepository.GetByIdWithPlanAsync(kpi.DivisionGoalId.Value)
                 ?? throw new NotFoundException(nameof(DivisionGoal), kpi.DivisionGoalId.Value);
 
-            if (goal.DivisionPlan == null || goal.DivisionPlan.PlanStatus != DivisionPlanStatus.Draft)
-                throw new BadRequestException("Division KPIs cannot be edited once the plan has been finalized or locked.");
+            if (goal.DivisionPlan == null || goal.DivisionPlan.PlanStatus == DivisionPlanStatus.Locked)
+                throw new BadRequestException("Division KPIs cannot be edited once the plan is locked.");
 
             if (goal.DivisionPlan != null)
             {
@@ -71,6 +71,9 @@ namespace Application.CQRS.Division.Handlers.Commands
             {
                 if (request.Weight.HasValue && request.Weight.Value != kpi.Weight)
                 {
+                    if (request.Weight.Value <= 0m || request.Weight.Value > 100m)
+                        throw new BadRequestException("Division KPI weight must be greater than 0% and cannot exceed 100%.");
+
                     var otherWeight = await kpiRepository.GetDivisionKpiWeightsSumAsync(goal.Id, kpi.Id);
                     if (otherWeight + request.Weight.Value > 100m)
                         throw new BadRequestException(

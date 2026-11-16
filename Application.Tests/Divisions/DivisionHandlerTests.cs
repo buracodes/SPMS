@@ -57,6 +57,7 @@ public class DivisionHandlerTests
             new DivisionContributionRepository(lease.Context),
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
+            new KpiRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
             new TestOrganizationalScopeService());
 

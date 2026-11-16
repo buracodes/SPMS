@@ -16,19 +16,22 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiActualValueRepository kpiActualValueRepository;
         private readonly ICurrentUserService currentUserService;
+        private readonly IOrganizationalScopeService organizationalScope;
 
         public GetActualValuesQueryHandler(
             IKpiRepository _kpiRepository,
             IFiscalYearRepository _fiscalYearRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiActualValueRepository _kpiActualValueRepository,
-            ICurrentUserService _currentUserService)
+            ICurrentUserService _currentUserService,
+            IOrganizationalScopeService _organizationalScope)
         {
             kpiRepository = _kpiRepository;
             fiscalYearRepository = _fiscalYearRepository;
             fiscalPeriodRepository = _fiscalPeriodRepository;
             kpiActualValueRepository = _kpiActualValueRepository;
             currentUserService = _currentUserService;
+            organizationalScope = _organizationalScope;
         }
 
         public async Task<Response<GetActualValuesDto>> Handle(GetActualValuesQueryRequest request, CancellationToken cancellationToken)
@@ -39,7 +42,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
                 throw new NotFoundException(nameof(Kpi), request.KpiId);
             }
 
-            KpiActualReadGuard.EnsureReadAllowed(kpi, currentUserService);
+            await KpiActualReadGuard.EnsureReadAllowedAsync(kpi, currentUserService, organizationalScope, cancellationToken);
 
             var fiscalYear = await fiscalYearRepository.GetById(request.FiscalYearId);
             if (fiscalYear == null)

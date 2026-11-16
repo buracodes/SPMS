@@ -1,20 +1,34 @@
 using Application.Exceptions;
 using Application.Interface.IService;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Application.CQRS.KpiActuals;
 
 /// <summary>
 /// FR-305: a division account reads actual values only for the KPIs assigned to its
 /// division (DivisionOwnerId) or for KPIs whose individual owner is the principal
-/// itself. Corporate principals (no division claim) keep the role-based visibility.
+/// itself. Explicitly authorized organization-wide visibility (the live
+/// performance:monitor.view grant) is evaluated first, so Admin and Power User accounts
+/// — which also carry an HR division claim — are not fenced by the ordinary division
+/// ownership restriction. Corporate principals keep the existing role-based visibility.
 /// </summary>
 public static class KpiActualReadGuard
 {
-    public static void EnsureReadAllowed(Domain.Entities.Kpi kpi, ICurrentUserService currentUserService)
+    public static async Task EnsureReadAllowedAsync(
+        Domain.Entities.Kpi kpi,
+        ICurrentUserService currentUserService,
+        IOrganizationalScopeService organizationalScope,
+        CancellationToken cancellationToken = default)
     {
         var divisionScope = currentUserService.DivisionIds;
         if (divisionScope.Count == 0)
+        {
+            return;
+        }
+
+        if (await organizationalScope.HasCorporateAccessAsync(cancellationToken))
         {
             return;
         }

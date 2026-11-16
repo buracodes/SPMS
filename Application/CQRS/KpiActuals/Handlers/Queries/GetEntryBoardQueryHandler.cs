@@ -126,29 +126,29 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
 
         /// <summary>
         /// KPIs the principal reports on: a corporate-visibility principal reads the whole
-        /// board, otherwise only a KPI owned by one of their divisions or by themselves. An
-        /// account with neither corporate visibility nor a division claim sees nothing.
-        /// KPIs of a division plan are excluded: they are reported on the division board.
+        /// board, otherwise only a KPI owned by one of their divisions or by themselves.
+        /// Personal ownership alone opens the board, so a corporate KPI assignment does not
+        /// depend on a division claim. Corporate data is never a fallback: a principal without
+        /// corporate visibility, a division assignment or an owned KPI receives no rows. KPIs
+        /// of a division plan are excluded — they are reported on the division board.
         /// </summary>
         private async Task<IReadOnlyList<Domain.Entities.Kpi>> KeepEntryScopeAsync(
             IEnumerable<Domain.Entities.Kpi> kpis,
             CancellationToken cancellationToken)
         {
+            var corporateKpis = kpis.Where(k => !k.DivisionGoalId.HasValue);
             if (await organizationalScope.HasCorporateAccessAsync(cancellationToken))
             {
-                return kpis.Where(k => !k.DivisionGoalId.HasValue).ToList();
+                return corporateKpis.ToList();
             }
 
             var divisionIds = organizationalScope.DivisionIds;
-            if (divisionIds.Count == 0)
-            {
-                return Array.Empty<Domain.Entities.Kpi>();
-            }
-
             var userId = organizationalScope.UserId;
-            return kpis.Where(k => !k.DivisionGoalId.HasValue &&
-                                   ((k.DivisionOwnerId.HasValue && divisionIds.Contains(k.DivisionOwnerId.Value)) ||
-                                    (k.OwnerId.HasValue && k.OwnerId == userId)))
+            return corporateKpis
+                .Where(k => (userId.HasValue && k.OwnerId.HasValue && k.OwnerId.Value == userId.Value) ||
+                            (divisionIds.Count > 0 &&
+                             k.DivisionOwnerId.HasValue &&
+                             divisionIds.Contains(k.DivisionOwnerId.Value)))
                 .ToList();
         }
 

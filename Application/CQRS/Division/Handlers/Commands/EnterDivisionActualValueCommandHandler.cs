@@ -5,6 +5,7 @@ using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Jobs;
 using Application.Responses;
+using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
 using MediatR;
@@ -21,6 +22,7 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
     private readonly IFiscalPeriodRepository fiscalPeriodRepository;
     private readonly IKpiActualValueRepository kpiActualValueRepository;
     private readonly ICurrentUserService currentUserService;
+    private readonly IEffectivePermissionService effectivePermissionService;
     private readonly ISpmsJobScheduler jobScheduler;
     private readonly IAuditContext auditContext;
 
@@ -32,6 +34,7 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
         IFiscalPeriodRepository _fiscalPeriodRepository,
         IKpiActualValueRepository _kpiActualValueRepository,
         ICurrentUserService _currentUserService,
+        IEffectivePermissionService _effectivePermissionService,
         ISpmsJobScheduler _jobScheduler,
         IAuditContext _auditContext)
     {
@@ -42,6 +45,7 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
         fiscalPeriodRepository = _fiscalPeriodRepository;
         kpiActualValueRepository = _kpiActualValueRepository;
         currentUserService = _currentUserService;
+        effectivePermissionService = _effectivePermissionService;
         jobScheduler = _jobScheduler;
         auditContext = _auditContext;
     }
@@ -55,10 +59,15 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
         }
 
         // The authorization scope is the whole set of divisions the caller may access, not
-        // the payload. A corporate caller (empty scope) is still fenced by the plan-member
-        // check below; a division caller may only target one of its authorized divisions.
+        // the payload. Explicitly authorized organization-wide entry (the live
+        // actuals:override grant held by Admin and Power User) is evaluated before the
+        // ordinary division-account restriction. A corporate caller (empty scope) is still
+        // fenced by the plan-member check below; a division caller may only target one of its
+        // authorized divisions unless it holds that right.
         var divisionScope = currentUserService.DivisionIds;
-        if (divisionScope.Count > 0 && !divisionScope.Contains(dto.DivisionId))
+        if (divisionScope.Count > 0
+            && !divisionScope.Contains(dto.DivisionId)
+            && !await HasCrossDivisionOverrideAsync(cancellationToken))
         {
             throw new ForbiddenException("A division account can only enter actual values for its authorized divisions.");
         }
@@ -88,16 +97,20 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
             throw new BadRequestException("No division plan exists for this division and scorecard.");
         }
 
-        if (divisionPlan.PlanStatus == DivisionPlanStatus.Draft)
+        // FR-906: division performance entry opens only after the plan is finalized. The
+        // finalization step is the plan-integrity checkpoint (weights, KPIs and targets),
+        // so accepting actuals for a draft would score a plan that may still change shape.
+        // Period-level FR-308 windows remain a separate gate checked by the period lock.
+        if (divisionPlan.PlanStatus != DivisionPlanStatus.Finalized)
         {
             throw new BadRequestException(
-                "This division plan is still a draft. Finalize it before entering actual values.");
+                "The division plan must be finalized before actual values can be entered.");
         }
 
-        // FR-906: never trust the division id in the payload. The KPI must actually
-        // belong to a division goal inside the resolved division's plan, otherwise a
-        // division account could write actuals for a sibling division that happens to
-        // share the same corporate scorecard.
+        // Never trust the division id in the payload. The KPI must actually belong to a
+        // division goal inside the resolved division's plan, otherwise a division account
+        // could write actuals for a sibling division that happens to share the same
+        // corporate scorecard.
         var divisionGoal = await divisionGoalRepository.GetById(kpi.DivisionGoalId.Value);
         if (divisionGoal == null || divisionGoal.DivisionPlanId != divisionPlan.Id)
         {
@@ -160,5 +173,18 @@ public class EnterDivisionActualValueCommandHandler : IRequestHandler<EnterDivis
             Message = "Division actual value entered successfully.",
             Data = result
         };
+    }
+
+    // The override right is resolved live, so a revoked grant stops applying on the next
+    // request instead of when the JWT happens to be refreshed.
+    private async Task<bool> HasCrossDivisionOverrideAsync(CancellationToken cancellationToken)
+    {
+        if (currentUserService.UserId is not Guid userId || userId == Guid.Empty)
+        {
+            return false;
+        }
+
+        return await effectivePermissionService.HasPermissionAsync(
+            userId, Permissions.ActualsOverride, cancellationToken);
     }
 }
