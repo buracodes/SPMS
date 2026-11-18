@@ -13,25 +13,19 @@ public class GetAllScorecardQueryHandler : IRequestHandler<GetAllScorecardQueryR
     private readonly IGoalRepository goalRepository;
     private readonly IKraRepository kraRepository;
     private readonly IKpiRepository kpiRepository;
-    private readonly IDivisionPlanRepository divisionPlanRepository;
-    private readonly IDivisionGoalRepository divisionGoalRepository;
 
     public GetAllScorecardQueryHandler(
         IScorecardRepository _scorecardRepository,
         IFiscalYearRepository _fiscalYearRepository,
         IGoalRepository _goalRepository,
         IKraRepository _kraRepository,
-        IKpiRepository _kpiRepository,
-        IDivisionPlanRepository _divisionPlanRepository,
-        IDivisionGoalRepository _divisionGoalRepository)
+        IKpiRepository _kpiRepository)
     {
         scorecardRepository = _scorecardRepository;
         fiscalYearRepository = _fiscalYearRepository;
         goalRepository = _goalRepository;
         kraRepository = _kraRepository;
         kpiRepository = _kpiRepository;
-        divisionPlanRepository = _divisionPlanRepository;
-        divisionGoalRepository = _divisionGoalRepository;
     }
 
     public async Task<Response<List<GetAllScorecardDto>>> Handle(GetAllScorecardQueryRequest request, CancellationToken cancellationToken)
@@ -48,18 +42,12 @@ public class GetAllScorecardQueryHandler : IRequestHandler<GetAllScorecardQueryR
             .GroupBy(k => k.ScorecardId)
             .ToDictionary(k => k.Key, k => k.Count());
 
+        // Corporate counts only: division KPIs share the corporate scorecard id but belong to
+        // division planning, whose goals live in a separate table.
         var kpiCountByScorecard = (await kpiRepository.GetAll())
+            .Where(k => !k.DivisionGoalId.HasValue)
             .GroupBy(k => k.ScorecardId)
             .ToDictionary(k => k.Key, k => k.Count());
-
-        var divisionPlans = await divisionPlanRepository.GetAll();
-        var divisionGoalsByPlan = (await divisionGoalRepository.GetAll())
-            .GroupBy(g => g.DivisionPlanId)
-            .ToDictionary(g => g.Key, g => g.Count());
-
-        var divisionGoalCountByScorecard = divisionPlans
-            .GroupBy(p => p.ScorecardId)
-            .ToDictionary(p => p.Key, p => p.Sum(plan => divisionGoalsByPlan.GetValueOrDefault(plan.Id)));
 
         var filtered = request.FiscalYearId.HasValue
             ? scorecards.Where(s => s.FiscalYearId == request.FiscalYearId.Value)
@@ -74,7 +62,7 @@ public class GetAllScorecardQueryHandler : IRequestHandler<GetAllScorecardQueryR
             Description = s.Description,
             Scope = s.Scope,
             ScorecardStatus = s.ScorecardStatus,
-            GoalCount = goalCountByScorecard.GetValueOrDefault(s.Id) + divisionGoalCountByScorecard.GetValueOrDefault(s.Id),
+            GoalCount = goalCountByScorecard.GetValueOrDefault(s.Id),
             KraCount = kraCountByScorecard.GetValueOrDefault(s.Id),
             KpiCount = kpiCountByScorecard.GetValueOrDefault(s.Id),
             CreatedDate = s.CreatedDate

@@ -38,7 +38,8 @@ public class GetScorecardByIdQueryHandler : IRequestHandler<GetScorecardByIdQuer
 
         var goalCount = goals.Count(g => g.ScorecardId == scorecard.Id);
         var kraCount = kras.Count(k => k.ScorecardId == scorecard.Id);
-        var kpiCount = kpis.Count(k => k.ScorecardId == scorecard.Id);
+        // Division KPIs share the corporate scorecard id; they are not part of this scorecard's scope.
+        var kpiCount = kpis.Count(k => k.ScorecardId == scorecard.Id && !k.DivisionGoalId.HasValue);
 
         return new Response<ScorecardDto>
         {
