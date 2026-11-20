@@ -285,7 +285,6 @@ public class SetPeriodLockConfigCommandHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Lock Config",
-            Scope = ScorecardScope.Corporate
         };
 
         var user = new User

@@ -104,7 +104,24 @@ public class PerformanceMonitoringService : IPerformanceMonitoringService
             return new PerformanceMonitoringDto();
         }
 
-        var scorecard = await ResolveScorecardAsync(fiscalYear, filter, cancellationToken);
+        var resolution = await ResolveScorecardAsync(fiscalYear, filter, cancellationToken);
+
+        if (resolution.SelectionRequired)
+        {
+            return new PerformanceMonitoringDto
+            {
+                Scope = organizationalScope.DivisionIds.Count > 0
+                    ? PerformanceScope.Division
+                    : PerformanceScope.Corporate,
+                FiscalYearId = fiscalYear.Id,
+                FiscalYearName = fiscalYear.Label,
+                PeriodType = filter.PeriodType ?? "Ytd",
+                ScorecardSelectionRequired = true,
+                SelectableScorecards = resolution.SelectableScorecards
+            };
+        }
+
+        var scorecard = resolution.Scorecard;
 
         if (scorecard == null)
         {
@@ -140,13 +157,6 @@ public class PerformanceMonitoringService : IPerformanceMonitoringService
         if (scorecard.FiscalYearId != fiscalYear.Id)
         {
             throw new BadRequestException("The selected scorecard does not belong to the selected fiscal year.");
-        }
-
-        // Performance monitoring always works from the corporate scorecard; division
-        // detail is reached by drilling into a division plan linked to it.
-        if (scorecard.Scope != ScorecardScope.Corporate)
-        {
-            throw new BadRequestException("Select a corporate scorecard, then a division to inspect its performance.");
         }
 
         var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(fiscalYear.Id);
@@ -235,47 +245,72 @@ public class PerformanceMonitoringService : IPerformanceMonitoringService
             cancellationToken);
     }
 
+    private sealed record ScorecardResolution(
+        Scorecard? Scorecard,
+        bool SelectionRequired,
+        IReadOnlyList<ScorecardSelectionOptionDto> SelectableScorecards)
+    {
+        public static ScorecardResolution None { get; } =
+            new(null, false, Array.Empty<ScorecardSelectionOptionDto>());
+
+        public static ScorecardResolution Resolved(Scorecard? scorecard) =>
+            new(scorecard, false, Array.Empty<ScorecardSelectionOptionDto>());
+
+        public static ScorecardResolution RequiresSelection(IEnumerable<Scorecard> scorecards) =>
+            new(
+                null,
+                true,
+                scorecards
+                    .OrderBy(s => s.Name)
+                    .ThenBy(s => s.Id)
+                    .Select(s => new ScorecardSelectionOptionDto { Id = s.Id, Name = s.Name })
+                    .ToList());
+    }
+
     /// <summary>
     /// Corporate callers may pick any scorecard for the fiscal year. A division employee is
     /// pinned to the scorecards their own division plans on: a requested id outside that set is
     /// rejected instead of silently falling back, so id tampering cannot probe other plans.
+    /// When several scorecards are in scope and none was requested, the caller must choose one;
+    /// the service never picks an arbitrary first scorecard.
     /// </summary>
-    private async Task<Scorecard?> ResolveScorecardAsync(
+    private async Task<ScorecardResolution> ResolveScorecardAsync(
         FiscalYear fiscalYear,
         PerformanceMonitoringFilter filter,
         CancellationToken cancellationToken)
     {
+        var allScorecards = await scorecardRepository.GetAll();
+        var candidates = allScorecards.Where(s => s.FiscalYearId == fiscalYear.Id);
+
         var scopeDivisionIds = organizationalScope.DivisionIds;
-        if (scopeDivisionIds.Count == 0)
+        if (scopeDivisionIds.Count > 0)
         {
-            return filter.ScorecardId.HasValue
-                ? await scorecardRepository.GetById(filter.ScorecardId.Value)
-                : (await scorecardRepository.GetAll()).FirstOrDefault(s => s.FiscalYearId == fiscalYear.Id && s.Scope == ScorecardScope.Corporate)
-                  ?? (await scorecardRepository.GetAll()).FirstOrDefault(s => s.FiscalYearId == fiscalYear.Id);
+            var plans = await divisionPlanRepository.GetByDivisionIdsAsync(scopeDivisionIds);
+            var planScorecardIds = plans.Select(p => p.ScorecardId).ToHashSet();
+
+            if (filter.ScorecardId.HasValue && !planScorecardIds.Contains(filter.ScorecardId.Value))
+            {
+                throw new ForbiddenException("You do not have access to this scorecard.");
+            }
+
+            candidates = candidates.Where(s => planScorecardIds.Contains(s.Id));
         }
-
-        var plans = await divisionPlanRepository.GetByDivisionIdsAsync(scopeDivisionIds);
-        var planScorecardIds = plans.Select(p => p.ScorecardId).ToHashSet();
-
-        if (filter.ScorecardId.HasValue && !planScorecardIds.Contains(filter.ScorecardId.Value))
-        {
-            throw new ForbiddenException("You do not have access to this scorecard.");
-        }
-
-        var scorecardsForYear = (await scorecardRepository.GetAll())
-            .Where(s => s.FiscalYearId == fiscalYear.Id && planScorecardIds.Contains(s.Id))
-            .ToList();
 
         if (filter.ScorecardId.HasValue)
         {
-            // The plan check above passed; load the id so a fiscal-year mismatch keeps
-            // returning the existing 400 rather than appearing as missing data.
-            return scorecardsForYear.FirstOrDefault(s => s.Id == filter.ScorecardId.Value)
-                ?? await scorecardRepository.GetById(filter.ScorecardId.Value);
+            // Load the requested id rather than substituting a candidate, so a fiscal-year
+            // mismatch keeps returning the existing 400 and an unknown id stays an empty view.
+            return ScorecardResolution.Resolved(
+                await scorecardRepository.GetById(filter.ScorecardId.Value));
         }
 
-        return scorecardsForYear.FirstOrDefault(s => s.Scope == ScorecardScope.Corporate)
-            ?? scorecardsForYear.FirstOrDefault();
+        var ordered = candidates.OrderBy(s => s.Name).ThenBy(s => s.Id).ToList();
+        return ordered.Count switch
+        {
+            0 => ScorecardResolution.None,
+            1 => ScorecardResolution.Resolved(ordered[0]),
+            _ => ScorecardResolution.RequiresSelection(ordered)
+        };
     }
 
     private async Task<PerformanceMonitoringDto> GetCorporateAsync(

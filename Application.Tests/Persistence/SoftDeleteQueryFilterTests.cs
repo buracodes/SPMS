@@ -20,7 +20,6 @@ public class SoftDeleteQueryFilterTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);
@@ -55,7 +54,6 @@ public class SoftDeleteQueryFilterTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Doomed goal", Weight = 1 };
 
@@ -93,7 +91,6 @@ public class SoftDeleteQueryFilterTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);

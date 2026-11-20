@@ -77,7 +77,6 @@ namespace Application.CQRS.Scorecard.Handlers.Commands
                 FiscalYearId = request.TargetFiscalYearId,
                 Name = name,
                 Description = source.Description,
-                Scope = source.Scope,
                 ScorecardStatus = ScorecardStatus.Active
             };
 

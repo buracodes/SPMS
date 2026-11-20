@@ -35,7 +35,6 @@ public class CorporateAuthorReadScopeTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "ECX Corporate 2026/27",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow trade value", Weight = 100 };

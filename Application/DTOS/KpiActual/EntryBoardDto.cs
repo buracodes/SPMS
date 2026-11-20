@@ -32,6 +32,5 @@ public class EntryScorecardDto
     public Guid Id { get; set; }
     public Guid FiscalYearId { get; set; }
     public required string Name { get; set; }
-    public ScorecardScope Scope { get; set; }
     public ScorecardStatus ScorecardStatus { get; set; }
 }

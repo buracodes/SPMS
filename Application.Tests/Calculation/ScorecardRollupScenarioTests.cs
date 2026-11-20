@@ -42,7 +42,6 @@ public class ScorecardRollupScenarioTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate scorecard",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
         context.Scorecards.Add(scorecard);

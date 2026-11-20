@@ -69,7 +69,7 @@ public class ReportingServiceTests
     private static async Task<(Guid ScorecardId, Guid GoalId, Guid KraId, Guid KpiId, Guid Month1, Guid Month2)> SeedAsync(
         TestDbContextLease lease, FiscalYear year)
     {
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX Corporate Strategy 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX Corporate Strategy 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), GoalId = goal.Id, ScorecardId = scorecard.Id, Name = "Sales Growth", Weight = 100 };
         var kpi = new Kpi
@@ -215,7 +215,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), GoalId = goal.Id, ScorecardId = scorecard.Id, Name = "Sales", Weight = 100 };
         var kpi = new Kpi
@@ -295,7 +295,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), GoalId = goal.Id, ScorecardId = scorecard.Id, Name = "Sales", Weight = 100 };
         var kpi = new Kpi { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, KraId = kra.Id, Name = "Revenue", Weight = 100, IsActive = true };
@@ -335,7 +335,7 @@ public class ReportingServiceTests
 
         var service = CreateService(lease);
 
-        // Quarter 2 → months M4..M6 only.
+        // Quarter 2 â†’ months M4..M6 only.
         var q2 = await service.GenerateAsync(new ReportFilter
         {
             ReportType = "scorecard-performance",
@@ -373,7 +373,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var division = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
         var plan = new DivisionPlan
@@ -440,7 +440,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var division = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
         var plan = new DivisionPlan
@@ -531,7 +531,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var division = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
         var plan = new DivisionPlan
@@ -581,7 +581,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var retail = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
         var trade = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Trade Operations", Code = "TRO" };
@@ -643,7 +643,7 @@ public class ReportingServiceTests
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = CreateYear(lease);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
         var retail = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Retail Operations", Code = "RET" };
         var trade = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Trade Operations", Code = "TRO" };

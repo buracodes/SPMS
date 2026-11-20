@@ -60,7 +60,6 @@ public class GetAllScorecardQueryHandler : IRequestHandler<GetAllScorecardQueryR
             FiscalYearName = fyDict.TryGetValue(s.FiscalYearId, out var fyName) ? fyName : null,
             Name = s.Name,
             Description = s.Description,
-            Scope = s.Scope,
             ScorecardStatus = s.ScorecardStatus,
             GoalCount = goalCountByScorecard.GetValueOrDefault(s.Id),
             KraCount = kraCountByScorecard.GetValueOrDefault(s.Id),

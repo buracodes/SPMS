@@ -66,17 +66,8 @@ namespace Application.CQRS.Division.Handlers.Queries
                 throw new NotFoundException(nameof(Domain.Entities.DivisionPlan), Guid.Empty);
             }
 
-            var corporateScorecard = scorecardRepository.GetQueryable()
-                .Where(s => s.FiscalYearId == scorecard.FiscalYearId
-                            && s.Scope == ScorecardScope.Corporate
-                            && s.Id != scorecard.Id)
-                .OrderBy(s => s.Name)
-                .FirstOrDefault();
-
-            // When the plan scorecard is itself the corporate scorecard (legacy layout),
-            // fall back to its own goals.
-            corporateScorecard ??= scorecard;
-            var corporateGoals = await goalRepository.GetByScorecardAsync(corporateScorecard.Id);
+            // FR-901/FR-904: the plan's selected scorecard is the only goal source.
+            var corporateGoals = await goalRepository.GetByScorecardAsync(scorecard.Id);
 
             var performance = await divisionPeriodCalculationService.CalculateAsync(
                 plan.Id,
@@ -99,7 +90,7 @@ namespace Application.CQRS.Division.Handlers.Queries
 
             var thresholds = await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken);
             var data = DivisionPlanDtoFactory.Build(
-                plan, scorecard, corporateGoals, performance, corporateScorecard, kpiTargets, fiscalPeriods, thresholds);
+                plan, scorecard, corporateGoals, performance, scorecard, kpiTargets, fiscalPeriods, thresholds);
             data.DivisionName = division.Name;
 
             return new Response<DivisionPlanDto>

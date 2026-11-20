@@ -8,7 +8,7 @@ using Domain.Enums;
 namespace Application.Services;
 
 /// <summary>
-/// Computes period-scoped scores for a division plan: KPI → division goal → overall.
+/// Computes period-scoped scores for a division plan: KPI â†’ division goal â†’ overall.
 /// Reuses the domain calculators and the same period scope rules as the scorecard
 /// engine so division KPIs honor YTD / Quarter / Month / Year filters identically.
 /// </summary>

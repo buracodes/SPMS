@@ -73,7 +73,6 @@ public class PeriodScoreAggregationTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate Scorecard",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Goal", Weight = 100 };

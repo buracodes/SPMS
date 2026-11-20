@@ -30,22 +30,6 @@ public class DivisionPlanRepository : GenericRepository<DivisionPlan>, IDivision
             .FirstOrDefaultAsync(p => p.DivisionId == divisionId && p.ScorecardId == scorecardId);
     }
 
-    public async Task<DivisionPlan?> GetFirstByScorecardWithDetailsAsync(Guid scorecardId)
-    {
-        return await context.DivisionPlans
-            .Include(p => p.Division)
-            .Include(p => p.Contributions)
-                .ThenInclude(c => c.Goal)
-            .Include(p => p.Goals)
-                .ThenInclude(g => g.Kpis)
-                    .ThenInclude(k => k.DivisionOwner)
-            .Include(p => p.Goals)
-                .ThenInclude(g => g.ParentGoal)
-            .Where(p => p.ScorecardId == scorecardId)
-            .OrderBy(p => p.CreatedDate)
-            .FirstOrDefaultAsync();
-    }
-
     public async Task<IReadOnlyList<DivisionPlan>> GetByDivisionAsync(Guid divisionId)
     {
         return await context.DivisionPlans
@@ -62,6 +46,7 @@ public class DivisionPlanRepository : GenericRepository<DivisionPlan>, IDivision
             .Include(p => p.Division)
             .Include(p => p.Scorecard)
             .OrderBy(p => p.CreatedDate)
+            .ThenBy(p => p.Id)
             .ToListAsync();
     }
 

@@ -25,7 +25,7 @@ public class KpiActualHandlerTests
         var fiscalYear = service.CreateFiscalYear(2025);
         var periods = service.GeneratePeriods(fiscalYear);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Test Scorecard", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Test Scorecard" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Test KRA", Weight = 100 };
         var kpi = new Kpi
@@ -373,7 +373,7 @@ public class KpiActualHandlerTests
         Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("period", StringComparison.OrdinalIgnoreCase));
     }
 
-    // ── FR-305 division read scoping ────────────────────────────────────────
+    // â”€â”€ FR-305 division read scoping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task GetActualValues_DivisionAccountForeignKpi_ThrowsForbidden()
@@ -460,7 +460,7 @@ public class KpiActualHandlerTests
             history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None));
     }
 
-    // ── Organization-wide authority precedes division ownership ───────────────
+    // â”€â”€ Organization-wide authority precedes division ownership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private static readonly string[] AdminLivePermissions =
     {

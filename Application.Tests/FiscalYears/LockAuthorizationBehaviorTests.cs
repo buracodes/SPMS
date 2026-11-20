@@ -158,7 +158,7 @@ public class LockAuthorizationBehaviorTests
     {
         // The corporate Data Entry board is the reporting surface for a corporate KPI that
         // was assigned to a division, so the owning division account must be able to save it
-        // during the entry window — the individual KPI owner field is empty by design.
+        // during the entry window â€” the individual KPI owner field is empty by design.
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateCorporateDivisionOwnedFixtureAsync(lease);
         // July 2025 (fiscal month 1) is open during 1-7 August 2025.
@@ -344,7 +344,7 @@ public class LockAuthorizationBehaviorTests
     {
         // Confirmed business rule (final-month grace): the fiscal year 2025/26 ends
         // 2026-06-30, so final-month (June) actual entry stays open for the KPI owner
-        // through the grace deadline 2026-07-07, inclusive — even though the calendar
+        // through the grace deadline 2026-07-07, inclusive â€” even though the calendar
         // year has already rolled over. No override permission or reason needed.
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateBaseFixtureAsync(lease);
@@ -404,7 +404,7 @@ public class LockAuthorizationBehaviorTests
         // FR-703 (item: closure timing): the fiscal year's final-month grace has expired
         // in ECX business time but its status is still Open (the nightly closure job has
         // not run yet). The scorecard itself is Active, the caller is the KPI owner, and
-        // the write must still be blocked — the deadline never depends on the job.
+        // the write must still be blocked â€” the deadline never depends on the job.
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateBaseFixtureAsync(lease);
         var clock = TestBusinessClock.On(new DateTime(2026, 7, 8, 8, 0, 0, DateTimeKind.Utc));
@@ -488,7 +488,7 @@ public class LockAuthorizationBehaviorTests
             behavior.Handle(command, _ => Task.FromResult(new Response<ActualValueDto>()), CancellationToken.None));
     }
 
-    // ── Role matrix across the locked entry window ──────────────────────────
+    // â”€â”€ Role matrix across the locked entry window â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task Allows_Locked_ForClaimedAdmin_OnCorporateActualCommand_WithOverrideReason()
@@ -787,7 +787,6 @@ public class LockAuthorizationBehaviorTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Division Lock Behavior",
-            Scope = ScorecardScope.Corporate
         };
         var parentGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Parent Goal", Weight = 100 };
         var ownerDivision = new Domain.Entities.Division { Id = Guid.NewGuid(), Name = "Information Technology", Code = "IT" };
@@ -843,7 +842,6 @@ public class LockAuthorizationBehaviorTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Corporate Division Owned",
-            Scope = ScorecardScope.Corporate,
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Parent Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Service Delivery", Weight = 100 };
@@ -886,7 +884,6 @@ public class LockAuthorizationBehaviorTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Lock Behavior",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Test KRA", Weight = 100 };

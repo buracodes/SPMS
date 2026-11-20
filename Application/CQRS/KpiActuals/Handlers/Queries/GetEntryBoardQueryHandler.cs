@@ -99,7 +99,6 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
                     Id = scorecard.Id,
                     FiscalYearId = scorecard.FiscalYearId,
                     Name = scorecard.Name,
-                    Scope = scorecard.Scope,
                     ScorecardStatus = scorecard.ScorecardStatus
                 });
             }

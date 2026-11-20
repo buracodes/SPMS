@@ -38,7 +38,6 @@ public class DivisionActualsHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "ECX Corporate Strategy 2026",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
 
@@ -628,7 +627,7 @@ public class DivisionActualsHandlerTests
             }, CancellationToken.None));
     }
 
-    // ── Organization-wide actuals authority precedes division ownership ──────
+    // â”€â”€ Organization-wide actuals authority precedes division ownership â”€â”€â”€â”€â”€â”€
 
     private static TestCurrentUserService ClaimedUser(
         Guid userId, Guid divisionId, params string[] jwtPermissions)

@@ -36,7 +36,6 @@ public class GetAllGoalFilterHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate 2025",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(year);
@@ -58,8 +57,8 @@ public class GetAllGoalFilterHandlerTests
         var calendar = new FiscalCalendarService();
         var year2025 = calendar.CreateFiscalYear(2025);
         var year2026 = calendar.CreateFiscalYear(2026);
-        var scorecard2025 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year2025.Id, Name = "Corporate 2025", Scope = ScorecardScope.Corporate };
-        var scorecard2026 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year2026.Id, Name = "Corporate 2026", Scope = ScorecardScope.Corporate };
+        var scorecard2025 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year2025.Id, Name = "Corporate 2025" };
+        var scorecard2026 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year2026.Id, Name = "Corporate 2026" };
 
         lease.Context.FiscalYears.AddRange(year2025, year2026);
         lease.Context.Scorecards.AddRange(scorecard2025, scorecard2026);

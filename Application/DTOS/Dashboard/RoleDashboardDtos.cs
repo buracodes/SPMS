@@ -22,6 +22,13 @@ public sealed class DashboardFilterDto
 
     /// <summary>True when the resolved fiscal year is closed, so the UI can warn instead of offering entry.</summary>
     public bool FiscalYearClosed { get; set; }
+
+    /// <summary>True when several scorecards are in scope and the caller must choose one.</summary>
+    public bool ScorecardSelectionRequired { get; set; }
+
+    /// <summary>Deterministically ordered choices shown when a scorecard must be selected.</summary>
+    public IReadOnlyList<DashboardFilterOptionDto> SelectableScorecards { get; set; }
+        = Array.Empty<DashboardFilterOptionDto>();
 }
 
 public sealed class DashboardFilterOptionDto

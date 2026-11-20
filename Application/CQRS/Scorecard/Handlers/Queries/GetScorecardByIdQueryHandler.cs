@@ -51,7 +51,6 @@ public class GetScorecardByIdQueryHandler : IRequestHandler<GetScorecardByIdQuer
                 FiscalYearId = scorecard.FiscalYearId,
                 Name = scorecard.Name,
                 Description = scorecard.Description,
-                Scope = scorecard.Scope,
                 ScorecardStatus = scorecard.ScorecardStatus,
                 GoalCount = goalCount,
                 KraCount = kraCount,

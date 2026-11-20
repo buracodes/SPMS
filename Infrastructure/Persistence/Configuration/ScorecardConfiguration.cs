@@ -15,9 +15,6 @@ public class ScorecardConfiguration : IEntityTypeConfiguration<Scorecard>
         builder.Property(scorecard => scorecard.Description)
             .HasMaxLength(1000);
 
-        builder.Property(scorecard => scorecard.Scope)
-            .IsRequired();
-
         builder.Property(scorecard => scorecard.ScorecardStatus)
             .IsRequired();
 

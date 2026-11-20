@@ -45,7 +45,6 @@ public class GoalWeightBudgetTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate 2026",
-            Scope = ScorecardScope.Corporate
         };
         lease.Context.FiscalYears.Add(year);
         lease.Context.Scorecards.Add(scorecard);
@@ -64,7 +63,7 @@ public class GoalWeightBudgetTests
             }
         };
 
-    // ── FRD boundary: a goal weight must be > 0 and <= 100 ──────────────────
+    // â”€â”€ FRD boundary: a goal weight must be > 0 and <= 100 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Theory]
     [InlineData(0)]
@@ -133,7 +132,7 @@ public class GoalWeightBudgetTests
         await Assert.ThrowsAnyAsync<DbUpdateException>(() => lease.Context.SaveChangesAsync());
     }
 
-    // ── Scorecard budget: sum must never exceed 100, below is allowed ───────
+    // â”€â”€ Scorecard budget: sum must never exceed 100, below is allowed â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task Create_Exactly100Total_IsAllowed()
@@ -206,7 +205,7 @@ public class GoalWeightBudgetTests
         Assert.Equal(1, await lease.Context.Goals.CountAsync());
     }
 
-    // ── Update budget behavior ───────────────────────────────────────────────
+    // â”€â”€ Update budget behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task Update_WeightChangeExceedingBudget_IsRejected()
@@ -255,7 +254,7 @@ public class GoalWeightBudgetTests
         Assert.Equal(30m, weights[second.Data!.Id]);
     }
 
-    // ── Transaction semantics (ADR-009 concurrency seam) ────────────────────
+    // â”€â”€ Transaction semantics (ADR-009 concurrency seam) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task UnitOfWork_Transaction_RollsBackWhenWorkThrows()

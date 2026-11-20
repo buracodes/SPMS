@@ -30,7 +30,7 @@ public class DivisionPlanMutationHandlerTests
         var year = service.CreateFiscalYear(2026);
         var periods = service.GeneratePeriods(year);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX Corporate Strategy 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX Corporate Strategy 2026" };
         var goalA = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 50 };
         var goalB = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Customer Satisfaction", Weight = 50 };
         var division = new Domain.Entities.Division { Id = divisionId, Name = "Retail Operations", Code = "RET" };
@@ -45,6 +45,12 @@ public class DivisionPlanMutationHandlerTests
         return new Fixture(year.Id, scorecard.Id, goalA.Id, goalB.Id, periods[0].Id);
     }
 
+    private static ScorecardClosureGuard CreateClosureGuard(TestDbContextLease lease)
+        => new(
+            new ScorecardRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            TestBusinessClock.Real());
+
     private static SetDivisionContributionsCommandHandler CreateContributionsHandler(TestDbContextLease lease)
         => new(
             new DivisionRepository(lease.Context),
@@ -55,7 +61,8 @@ public class DivisionPlanMutationHandlerTests
             new GoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
-            new TestOrganizationalScopeService());
+            new TestOrganizationalScopeService(),
+            CreateClosureGuard(lease));
 
     private static CreateDivisionGoalCommandHandler CreateDivisionGoalHandler(TestDbContextLease lease)
         => new(
@@ -66,7 +73,8 @@ public class DivisionPlanMutationHandlerTests
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
-            new TestOrganizationalScopeService());
+            new TestOrganizationalScopeService(),
+            CreateClosureGuard(lease));
 
     private static CreateDivisionKpiCommandHandler CreateDivisionKpiHandler(TestDbContextLease lease)
         => new(
@@ -77,7 +85,8 @@ public class DivisionPlanMutationHandlerTests
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
-            new TestOrganizationalScopeService());
+            new TestOrganizationalScopeService(),
+            CreateClosureGuard(lease));
 
     private static UpdateDivisionGoalCommandHandler CreateUpdateGoalHandler(TestDbContextLease lease)
         => new(
@@ -262,7 +271,7 @@ public class DivisionPlanMutationHandlerTests
             new KpiTargetRepository(lease.Context),
             new TestOrganizationalScopeService());
 
-    // ── Update division goal ──────────────────────────────────────────────
+    // â”€â”€ Update division goal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task UpdateDivisionGoal_UpdatesNameAndWeight()
@@ -374,7 +383,7 @@ public class DivisionPlanMutationHandlerTests
                 new UpdateDivisionGoalCommandRequest { DivisionGoalId = goalId, Name = "Renamed" }, CancellationToken.None));
     }
 
-    // ── Delete division goal ──────────────────────────────────────────────
+    // â”€â”€ Delete division goal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task DeleteDivisionGoal_RemovesGoalAndItsKpis()
@@ -424,7 +433,7 @@ public class DivisionPlanMutationHandlerTests
                 new DeleteDivisionGoalCommandRequest { DivisionGoalId = goalId }, CancellationToken.None));
     }
 
-    // ── Update division KPI ───────────────────────────────────────────────
+    // â”€â”€ Update division KPI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task UpdateDivisionKpi_UpdatesFields()
@@ -550,7 +559,7 @@ public class DivisionPlanMutationHandlerTests
         Assert.Equal(120m, savedTargets.Single(t => t.Granularity == TargetGranularity.Annual).TargetValue);
     }
 
-    // ── Delete division KPI ───────────────────────────────────────────────
+    // â”€â”€ Delete division KPI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task DeleteDivisionKpi_SoftDeletes()
@@ -659,7 +668,7 @@ public class DivisionPlanMutationHandlerTests
                 new DeleteDivisionKpiCommandRequest { DivisionKpiId = kpi.Id }, CancellationToken.None));
     }
 
-    // ── Plan context by scorecard ─────────────────────────────────────────
+    // â”€â”€ Plan context by scorecard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task GetDivisionPlanContext_NoPlan_ReturnsEmptyPlanWithAvailableGoals()
@@ -776,7 +785,7 @@ public class DivisionPlanMutationHandlerTests
         Assert.Equal(divisionId, response.Data!.DivisionId);
     }
 
-    // ── Finalize division plan ────────────────────────────────────────────
+    // â”€â”€ Finalize division plan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task FinalizeDivisionPlan_FinalizesDraftPlan()

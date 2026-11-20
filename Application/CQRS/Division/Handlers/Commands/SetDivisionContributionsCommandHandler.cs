@@ -5,6 +5,7 @@ using Application.Interface;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
+using Application.Services;
 using Domain.Entities;
 using Domain.Enums;
 using MediatR;
@@ -22,6 +23,7 @@ namespace Application.CQRS.Division.Handlers.Commands
         private readonly IKpiRepository kpiRepository;
         private readonly IUnitOfWork unitOfWork;
         private readonly IOrganizationalScopeService organizationalScope;
+        private readonly ScorecardClosureGuard closureGuard;
 
         public SetDivisionContributionsCommandHandler(
             IDivisionRepository _divisionRepository,
@@ -32,9 +34,11 @@ namespace Application.CQRS.Division.Handlers.Commands
             IGoalRepository _goalRepository,
             IKpiRepository _kpiRepository,
             IUnitOfWork _unitOfWork,
-            IOrganizationalScopeService _organizationalScope)
+            IOrganizationalScopeService _organizationalScope,
+            ScorecardClosureGuard _closureGuard)
         {
             organizationalScope = _organizationalScope;
+            closureGuard = _closureGuard;
             divisionRepository = _divisionRepository;
             scorecardRepository = _scorecardRepository;
             divisionPlanRepository = _divisionPlanRepository;
@@ -60,6 +64,8 @@ namespace Application.CQRS.Division.Handlers.Commands
             {
                 throw new NotFoundException(nameof(Domain.Entities.Scorecard), request.ScorecardId);
             }
+
+            await closureGuard.EnsureScorecardOpenAsync(scorecard.Id, cancellationToken);
 
             var goalIds = request.GoalIds.Distinct().ToList();
             var validGoalIds = await goalRepository.GetGoalIdsByScorecardAsync(scorecard.Id);

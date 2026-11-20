@@ -39,7 +39,6 @@ public class KpiOwnerAssignmentTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate 2026",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Win mandates", Weight = 100 };

@@ -18,7 +18,6 @@ public class ScorecardPersistenceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Corporate Scorecard",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);
@@ -30,7 +29,6 @@ public class ScorecardPersistenceTests
             .SingleAsync();
 
         Assert.Equal("Corporate Scorecard", persisted.Name);
-        Assert.Equal(ScorecardScope.Corporate, persisted.Scope);
         Assert.Equal(ScorecardStatus.Active, persisted.ScorecardStatus);
         Assert.Equal("2025/26", persisted.FiscalYear!.Label);
     }
@@ -74,7 +72,6 @@ public class ScorecardPersistenceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYearId,
             Name = name,
-            Scope = ScorecardScope.Corporate
         };
     }
 }

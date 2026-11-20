@@ -46,15 +46,15 @@ public class KpiTargetBulkHandlerTests
 
         var scorecard = new Scorecard
         {
-            Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate", Scope = ScorecardScope.Corporate
+            Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate"
         };
         var otherScorecard = new Scorecard
         {
-            Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Division", Scope = ScorecardScope.Division
+            Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Division"
         };
         var staleScorecard = new Scorecard
         {
-            Id = Guid.NewGuid(), FiscalYearId = otherFiscalYear.Id, Name = "Last Year", Scope = ScorecardScope.Corporate
+            Id = Guid.NewGuid(), FiscalYearId = otherFiscalYear.Id, Name = "Last Year"
         };
 
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
@@ -142,7 +142,7 @@ public class KpiTargetBulkHandlerTests
         };
     }
 
-    // ── Bulk read ────────────────────────────────────────────────────────────
+    // â”€â”€ Bulk read â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task GetKpiTargetsBulk_ReturnsEveryKpiOfTheFiscalYear()
@@ -278,7 +278,7 @@ public class KpiTargetBulkHandlerTests
             }, CancellationToken.None));
     }
 
-    // ── Bulk write ────────────────────────────────────────────────────────────
+    // â”€â”€ Bulk write â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task SetKpiTargetsBulk_SavesEveryKpiInOneRequest()
@@ -413,7 +413,7 @@ public class KpiTargetBulkHandlerTests
         Assert.Equal(400, targets.Single(t => t.Granularity == TargetGranularity.Annual).TargetValue);
     }
 
-    // ── Validator ─────────────────────────────────────────────────────────────
+    // â”€â”€ Validator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public void SetKpiTargetsBulkValidator_RequiresFiscalYearAndAtLeastOneKpi()

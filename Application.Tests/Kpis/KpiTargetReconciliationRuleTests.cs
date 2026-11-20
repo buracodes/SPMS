@@ -20,7 +20,7 @@ public class KpiTargetReconciliationRuleTests
         var fiscalYear = service.CreateFiscalYear(2025);
         var periods = service.GeneratePeriods(fiscalYear);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate 2025", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate 2025" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Win mandates", Weight = 100 };
         var kpi = new Kpi

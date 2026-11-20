@@ -38,7 +38,7 @@ public class FiscalYearMappingTests
     [Fact]
     public void Map_List_ReproductionScenario_ReportsOpenYearAsEditable()
     {
-        // Reproduction: July 1, 2026 – June 30, 2027, current date October 16, 2026, no
+        // Reproduction: July 1, 2026 â€“ June 30, 2027, current date October 16, 2026, no
         // scorecards. The year is Open and has not ended, so the frontend must see status
         // "Open" (not the soft-delete "Active") and keep editing available.
         var year = new FiscalYear
@@ -75,7 +75,6 @@ public class FiscalYearMappingTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate 2026",
-            Scope = ScorecardScope.Corporate,
         });
         await lease.Context.SaveChangesAsync();
 

@@ -55,14 +55,12 @@ public class EntryBoardQueryHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Corporate Scorecard",
-            Scope = ScorecardScope.Corporate,
         };
         var finance = new Scorecard
         {
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Finance Scorecard",
-            Scope = ScorecardScope.Corporate,
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = corporate.Id, Name = "Operational Excellence", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = corporate.Id, GoalId = goal.Id, Name = "Service Delivery", Weight = 100 };
@@ -155,7 +153,7 @@ public class EntryBoardQueryHandlerTests
             scope);
     }
 
-    /// <summary>Application Development account with no corporate visibility — the data-entry persona.</summary>
+    /// <summary>Application Development account with no corporate visibility â€” the data-entry persona.</summary>
     private static TestOrganizationalScopeService DivisionScope(Guid appDevDivisionId) => new()
     {
         UserId = entryUserId,
@@ -294,7 +292,6 @@ public class EntryBoardQueryHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = nextYear.Id,
             Name = "Next Year Scorecard",
-            Scope = ScorecardScope.Corporate,
         };
         var nextGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = nextScorecard.Id, Name = "Next Year Goal", Weight = 100 };
         var nextKra = new Kra { Id = Guid.NewGuid(), ScorecardId = nextScorecard.Id, GoalId = nextGoal.Id, Name = "Next Year KRA", Weight = 100 };

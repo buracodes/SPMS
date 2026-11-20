@@ -33,7 +33,6 @@ public class UpdateScorecardCommandHandler : IRequestHandler<UpdateScorecardComm
         }
 
         if (request.Description != null) scorecard.Description = request.Description;
-        if (request.Scope.HasValue) scorecard.Scope = request.Scope.Value;
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -47,7 +46,6 @@ public class UpdateScorecardCommandHandler : IRequestHandler<UpdateScorecardComm
                 FiscalYearId = scorecard.FiscalYearId,
                 Name = scorecard.Name,
                 Description = scorecard.Description,
-                Scope = scorecard.Scope,
                 ScorecardStatus = scorecard.ScorecardStatus
             }
         };

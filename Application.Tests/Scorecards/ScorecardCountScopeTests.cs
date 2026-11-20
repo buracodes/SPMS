@@ -22,7 +22,6 @@ public class ScorecardCountScopeTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "ECX Corporate Strategy",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow revenue", Weight = 100 };

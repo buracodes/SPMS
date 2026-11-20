@@ -137,7 +137,6 @@ public class GetPeriodLockStatusQueryHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "No Calendar",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);
@@ -185,7 +184,6 @@ public class GetPeriodLockStatusQueryHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Lock Status",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);

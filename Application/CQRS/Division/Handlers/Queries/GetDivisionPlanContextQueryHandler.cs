@@ -71,23 +71,31 @@ namespace Application.CQRS.Division.Handlers.Queries
 
             var fiscalPeriods = await fiscalPeriodRepository.GetByFiscalYearAsync(scorecard.FiscalYearId);
 
-            // The plan's scorecard is normally the corporate scorecard itself; only the legacy
-            // division-scope layout needs the corporate counterpart. Never substitute another
-            // corporate scorecard's goals when the plan already points at a corporate one.
-            var corporateScorecard = scorecard.Scope == ScorecardScope.Corporate
-                ? scorecard
-                : scorecardRepository.GetQueryable()
-                    .Where(s => s.FiscalYearId == scorecard.FiscalYearId
-                                && s.Scope == ScorecardScope.Corporate)
-                    .OrderBy(s => s.Name)
-                    .FirstOrDefault() ?? scorecard;
+            // FR-901/FR-904: the selected scorecard is the single source of plan goals.
+            // There are no division-owned scorecards and no fallback to a different one.
+            var corporateGoals = await goalRepository.GetByScorecardAsync(scorecard.Id);
 
-            var corporateGoals = await goalRepository.GetByScorecardAsync(corporateScorecard.Id);
+            DivisionPlan? plan;
+            if (request.DivisionId.HasValue)
+            {
+                plan = await divisionPlanRepository.GetByDivisionAndScorecardWithDetailsAsync(
+                    request.DivisionId.Value, request.ScorecardId);
+            }
+            else
+            {
+                // A corporate caller without a division claim must name the division when
+                // several plans exist. Picking the first plan made the page non-deterministic.
+                var plans = await divisionPlanRepository.GetByScorecardAsync(request.ScorecardId);
+                if (plans.Count > 1)
+                {
+                    throw new BadRequestException("Select a division to load its plan.");
+                }
 
-            var plan = request.DivisionId.HasValue
-                ? await divisionPlanRepository.GetByDivisionAndScorecardWithDetailsAsync(
-                    request.DivisionId.Value, request.ScorecardId)
-                : await divisionPlanRepository.GetFirstByScorecardWithDetailsAsync(request.ScorecardId);
+                plan = plans.Count == 1
+                    ? await divisionPlanRepository.GetByDivisionAndScorecardWithDetailsAsync(
+                        plans[0].DivisionId, request.ScorecardId)
+                    : null;
+            }
 
             if (plan == null)
             {
@@ -110,8 +118,8 @@ namespace Application.CQRS.Division.Handlers.Queries
                         ScorecardName = scorecard.Name,
                         FiscalYearId = scorecard.FiscalYearId,
                         PlanStatus = DivisionPlanStatus.Draft,
-                        CorporateScorecardId = corporateScorecard?.Id,
-                        CorporateScorecardName = corporateScorecard?.Name,
+                        CorporateScorecardId = scorecard.Id,
+                        CorporateScorecardName = scorecard.Name,
                         Contributions = new List<CorporateGoalDto>(),
                         AvailableGoals = corporateGoals
                             .OrderBy(g => g.Name)
@@ -148,7 +156,7 @@ namespace Application.CQRS.Division.Handlers.Queries
 
             var thresholds = await ragThresholdService.GetEffectiveAsync(cancellationToken: cancellationToken);
             var data = DivisionPlanDtoFactory.Build(
-                plan, scorecard, corporateGoals, performance, corporateScorecard, kpiTargets, fiscalPeriods, thresholds);
+                plan, scorecard, corporateGoals, performance, scorecard, kpiTargets, fiscalPeriods, thresholds);
             data.DivisionName = plan.Division?.Name ?? data.DivisionName;
 
             return new Response<DivisionPlanDto>

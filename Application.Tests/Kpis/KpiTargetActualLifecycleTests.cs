@@ -19,7 +19,7 @@ public class KpiTargetActualLifecycleTests
         var fiscalYear = service.CreateFiscalYear(2025);
         var periods = service.GeneratePeriods(fiscalYear);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate 2025", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate 2025" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Win mandates", Weight = 100 };
         var kpi = new Kpi
@@ -67,7 +67,7 @@ public class KpiTargetActualLifecycleTests
             new Application.Services.AuditContext(),
             new TestEffectivePermissionService());
 
-    // ── FR-309 day-dedupe ───────────────────────────────────────────────────
+    // â”€â”€ FR-309 day-dedupe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task AutomatedSecondWriteSameDay_RetiresTheEarlierPull()
@@ -126,7 +126,7 @@ public class KpiTargetActualLifecycleTests
         Assert.DoesNotContain(rows, r => r.IsDeleted);
     }
 
-    // ── Historical target preservation ─────────────────────────────────────
+    // â”€â”€ Historical target preservation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task StaleTargetCombination_IsSoftDeletedAndRecreatable()

@@ -169,7 +169,6 @@ public class RoleDashboardServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "ECX Corporate Strategy",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
 
@@ -817,7 +816,6 @@ public class RoleDashboardServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "ECX Secondary Strategy",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
         var corporateGoalB = new Goal
@@ -1012,7 +1010,7 @@ public class RoleDashboardServiceTests
     }
 
     [Fact]
-    public async Task Unknown_scorecard_request_falls_back_to_a_scorecard_the_caller_may_see()
+    public async Task Unknown_scorecard_request_is_rejected_instead_of_falling_back()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = await SeedYearAsync(lease);
@@ -1025,7 +1023,6 @@ public class RoleDashboardServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Unrelated Scorecard",
-            Scope = ScorecardScope.Corporate
         };
         lease.Context.Scorecards.Add(foreignScorecard);
         await lease.Context.SaveChangesAsync();
@@ -1037,10 +1034,43 @@ public class RoleDashboardServiceTests
             Permissions = DataInputPermissions
         };
 
-        var context = await CreateService(lease, user).GetContextAsync(new() { ScorecardId = foreignScorecard.Id });
-
         // The caller cannot select a scorecard outside their scope.
-        Assert.Equal(scorecardId, context.Filter.ScorecardId);
+        await Assert.ThrowsAsync<Application.Exceptions.ForbiddenException>(
+            () => CreateService(lease, user).GetContextAsync(new() { ScorecardId = foreignScorecard.Id }));
+    }
+
+    [Fact]
+    public async Task Multiple_scorecards_without_an_explicit_selection_require_a_choice()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease);
+        var ownerId = await EnsureUserAsync(lease);
+        var otherId = await EnsureUserAsync(lease);
+        var (scorecardId, _, _, _) = await SeedHierarchyAsync(lease, year, ownerId, otherId);
+
+        var secondScorecard = new Scorecard
+        {
+            Id = Guid.NewGuid(),
+            FiscalYearId = year.Id,
+            Name = "Second Strategy",
+            ScorecardStatus = ScorecardStatus.Active
+        };
+        lease.Context.Scorecards.Add(secondScorecard);
+        await lease.Context.SaveChangesAsync();
+
+        var user = new TestCurrentUserService
+        {
+            UserId = Guid.NewGuid(),
+            Roles = new[] { Roles.Executive },
+            Permissions = ExecutivePermissions
+        };
+
+        var context = await CreateService(lease, user).GetContextAsync(null);
+
+        Assert.True(context.Filter.ScorecardSelectionRequired);
+        Assert.Null(context.Filter.ScorecardId);
+        Assert.Equal(new[] { scorecardId, secondScorecard.Id },
+            context.Filter.SelectableScorecards.Select(s => s.Id));
     }
 
     [Fact]

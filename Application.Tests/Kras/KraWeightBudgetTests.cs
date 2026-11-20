@@ -46,7 +46,6 @@ public class KraWeightBudgetTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Corporate 2026",
-            Scope = ScorecardScope.Corporate
         };
         lease.Context.FiscalYears.Add(year);
         lease.Context.Scorecards.Add(scorecard);
@@ -77,7 +76,7 @@ public class KraWeightBudgetTests
             Weight = weight
         };
 
-    // ── FRD boundary: a KRA weight must be > 0 and <= 100 ───────────────────
+    // â”€â”€ FRD boundary: a KRA weight must be > 0 and <= 100 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Theory]
     [InlineData(0)]
@@ -166,7 +165,7 @@ public class KraWeightBudgetTests
         Assert.Equal(1, await lease.Context.Kras.CountAsync());
     }
 
-    // ── Goal budget: sum must never exceed 100, exactly 100 is allowed ───────
+    // â”€â”€ Goal budget: sum must never exceed 100, exactly 100 is allowed â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task Create_Exactly100Total_IsAllowed()
@@ -248,7 +247,6 @@ public class KraWeightBudgetTests
             Id = Guid.NewGuid(),
             FiscalYearId = scorecardA.FiscalYearId,
             Name = "Division 2026",
-            Scope = ScorecardScope.Corporate
         };
         lease.Context.Scorecards.Add(scorecardB);
         await lease.Context.SaveChangesAsync();
@@ -278,7 +276,7 @@ public class KraWeightBudgetTests
         Assert.Equal(1, await lease.Context.Kras.CountAsync());
     }
 
-    // ── Update budget behavior (current KRA excluded from the total) ────────
+    // â”€â”€ Update budget behavior (current KRA excluded from the total) â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task Update_WeightChangeExceedingBudget_IsRejected_AndKeepsOriginalWeight()
@@ -367,7 +365,7 @@ public class KraWeightBudgetTests
         Assert.Equal(30m, weights[second.Data!.Id]);
     }
 
-    // ── Budget scoping and soft-deleted KRAs ─────────────────────────────────
+    // â”€â”€ Budget scoping and soft-deleted KRAs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task SoftDeleted_KRAs_AreExcludedFromBudget()
@@ -429,7 +427,7 @@ public class KraWeightBudgetTests
         Assert.Equal(0m, await repository.GetWeightsSumAsync(Guid.NewGuid()));
     }
 
-    // ── Transaction semantics (ADR-009 concurrency seam) ────────────────────
+    // â”€â”€ Transaction semantics (ADR-009 concurrency seam) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
     public async Task FailingCreate_LeavesNoPartialChanges()
@@ -471,7 +469,7 @@ public class KraWeightBudgetTests
     // in-memory SQLite connection; on SQL Server the protection above (serializable
     // transaction wrapping the SQL sum + insert) serializes the writers per goal.
 
-    // ── Deletion integrity (soft delete, restricted FKs, no cascades) ───────
+    // â”€â”€ Deletion integrity (soft delete, restricted FKs, no cascades) â”€â”€â”€â”€â”€â”€â”€
 
     private static async Task<Kpi> SeedKpiAsync(TestDbContextLease lease, Kra kra, string name = "Revenue KPI")
     {

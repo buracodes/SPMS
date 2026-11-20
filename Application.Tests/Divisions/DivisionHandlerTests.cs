@@ -29,7 +29,7 @@ public class DivisionHandlerTests
         var year = service.CreateFiscalYear(2026);
         var periods = service.GeneratePeriods(year);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX Corporate Strategy 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX Corporate Strategy 2026" };
         var goalA = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 50 };
         var goalB = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Customer Satisfaction", Weight = 50 };
         var division = new Domain.Entities.Division { Id = divisionId, Name = "Retail Operations", Code = "RET" };
@@ -43,6 +43,12 @@ public class DivisionHandlerTests
 
         return new Fixture(year.Id, scorecard.Id, goalA.Id, goalB.Id, periods[0].Id);
     }
+
+    private static ScorecardClosureGuard CreateClosureGuard(TestDbContextLease lease)
+        => new(
+            new ScorecardRepository(lease.Context),
+            new FiscalYearRepository(lease.Context),
+            TestBusinessClock.Real());
 
     private static CreateDivisionCommandHandler CreateDivisionHandler(TestDbContextLease lease)
         => new(
@@ -59,7 +65,8 @@ public class DivisionHandlerTests
             new GoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
-            new TestOrganizationalScopeService());
+            new TestOrganizationalScopeService(),
+            CreateClosureGuard(lease));
 
     private static CreateDivisionGoalCommandHandler CreateDivisionGoalHandler(TestDbContextLease lease)
         => new(
@@ -70,7 +77,8 @@ public class DivisionHandlerTests
             new DivisionGoalRepository(lease.Context),
             new GoalRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
-            new TestOrganizationalScopeService());
+            new TestOrganizationalScopeService(),
+            CreateClosureGuard(lease));
 
     private static CreateDivisionKpiCommandHandler CreateDivisionKpiHandler(TestDbContextLease lease)
         => new(
@@ -81,7 +89,8 @@ public class DivisionHandlerTests
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
             new SpmsUnitOfWork(lease.Context),
-            new TestOrganizationalScopeService());
+            new TestOrganizationalScopeService(),
+            CreateClosureGuard(lease));
 
     private static GetDivisionPlanQueryHandler CreateGetPlanHandler(TestDbContextLease lease)
         => new(

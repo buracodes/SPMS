@@ -9,7 +9,6 @@ public class ScorecardDto : CommonEntityDto
     public Guid FiscalYearId { get; set; }
     public required string Name { get; set; }
     public string? Description { get; set; }
-    public ScorecardScope Scope { get; set; }
     public ScorecardStatus ScorecardStatus { get; set; }
     public int GoalCount { get; set; }
     public int KraCount { get; set; }

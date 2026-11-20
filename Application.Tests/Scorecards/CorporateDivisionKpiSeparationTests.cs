@@ -26,7 +26,6 @@ public class CorporateDivisionKpiSeparationTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "ECX Corporate Strategy",
-            Scope = ScorecardScope.Corporate,
             ScorecardStatus = ScorecardStatus.Active
         };
         var goal = new Goal

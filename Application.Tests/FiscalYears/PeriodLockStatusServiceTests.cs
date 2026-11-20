@@ -206,7 +206,6 @@ public class PeriodLockStatusServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Grace Test",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);
@@ -268,7 +267,6 @@ public class PeriodLockStatusServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Grace Isolation Test",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);
@@ -323,7 +321,6 @@ public class PeriodLockStatusServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Grace Extension Test",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);
@@ -368,7 +365,6 @@ public class PeriodLockStatusServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Lock Test",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);

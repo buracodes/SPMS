@@ -137,7 +137,7 @@ public class GoalScoreNormalizationTests
         var periods = await lease.Context.FiscalPeriods.Where(p => p.FiscalYearId == year.Id).OrderBy(p => p.FiscalMonth).ToListAsync();
         var month1 = periods[0];
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "Corporate 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "Corporate 2026" };
         var activeGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Active Goal", Weight = 40m, IsActive = true };
         var inactiveGoal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Inactive Goal", Weight = 60m, IsActive = false };
         var activeKra = new Kra { Id = Guid.NewGuid(), GoalId = activeGoal.Id, ScorecardId = scorecard.Id, Name = "Sales", Weight = 100m };

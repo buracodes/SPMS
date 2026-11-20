@@ -39,6 +39,12 @@ public class PerformanceKpiRowDto
     public string? Trend { get; set; }
 }
 
+public sealed class ScorecardSelectionOptionDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+}
+
 public class PerformanceDivisionSummaryDto
 {
     public Guid DivisionId { get; set; }
@@ -62,6 +68,8 @@ public class PerformanceMonitoringDto
     public string? FiscalYearName { get; set; }
     public Guid? ScorecardId { get; set; }
     public string? ScorecardName { get; set; }
+    public bool ScorecardSelectionRequired { get; set; }
+    public IReadOnlyList<ScorecardSelectionOptionDto> SelectableScorecards { get; set; } = Array.Empty<ScorecardSelectionOptionDto>();
     public Guid? DivisionId { get; set; }
     public string? DivisionName { get; set; }
     public decimal? OverallScore { get; set; }

@@ -82,7 +82,6 @@ public class PerformanceMonitoringServiceTests
     private static async Task<Scorecard> SeedScorecardAsync(
         TestDbContextLease lease,
         Guid fiscalYearId,
-        ScorecardScope scope = ScorecardScope.Corporate,
         string name = "Corporate Scorecard")
     {
         var scorecard = new Scorecard
@@ -90,7 +89,6 @@ public class PerformanceMonitoringServiceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYearId,
             Name = name,
-            Scope = scope,
             ScorecardStatus = ScorecardStatus.Active
         };
         lease.Context.Scorecards.Add(scorecard);
@@ -311,21 +309,42 @@ public class PerformanceMonitoringServiceTests
     }
 
     [Fact]
-    public async Task Non_corporate_scorecard_is_rejected()
+    public async Task Multiple_scorecards_without_an_explicit_selection_require_a_choice()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var year = await SeedYearAsync(lease, 2026);
-        var divisionScorecard = await SeedScorecardAsync(
-            lease, year.Id, ScorecardScope.Division, "Division Scorecard");
+        var first = await SeedScorecardAsync(lease, year.Id, "Alpha Scorecard");
+        var second = await SeedScorecardAsync(lease, year.Id, "Beta Scorecard");
 
         var scope = new TestOrganizationalScopeService { HasCorporateAccess = true };
         var service = CreateService(lease, scope);
 
-        await Assert.ThrowsAsync<BadRequestException>(() => service.GetAsync(new PerformanceMonitoringFilter
+        var result = await service.GetAsync(new PerformanceMonitoringFilter { FiscalYearId = year.Id });
+
+        Assert.True(result.ScorecardSelectionRequired);
+        Assert.Null(result.ScorecardId);
+        Assert.Equal(new[] { first.Id, second.Id }, result.SelectableScorecards.Select(s => s.Id));
+    }
+
+    [Fact]
+    public async Task Explicit_scorecard_is_used_even_when_several_scorecards_are_available()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = await SeedYearAsync(lease, 2026);
+        await SeedScorecardAsync(lease, year.Id, "Alpha Scorecard");
+        var selected = await SeedScorecardAsync(lease, year.Id, "Beta Scorecard");
+
+        var scope = new TestOrganizationalScopeService { HasCorporateAccess = true };
+        var service = CreateService(lease, scope);
+
+        var result = await service.GetAsync(new PerformanceMonitoringFilter
         {
             FiscalYearId = year.Id,
-            ScorecardId = divisionScorecard.Id
-        }));
+            ScorecardId = selected.Id
+        });
+
+        Assert.False(result.ScorecardSelectionRequired);
+        Assert.Equal(selected.Id, result.ScorecardId);
     }
 
     [Fact]

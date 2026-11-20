@@ -178,7 +178,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Scorecard 2099",
-            Scope = ScorecardScope.Corporate
         });
         await lease.Context.SaveChangesAsync();
         var guard = CreateGuard(lease);
@@ -197,7 +196,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Scorecard 2099",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "KRA", Weight = 100 };
@@ -246,7 +244,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Scorecard 2099",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "KRA", Weight = 100 };
@@ -322,7 +319,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Scorecard 2099",
-            Scope = ScorecardScope.Corporate
         });
         await lease.Context.SaveChangesAsync();
         var guard = CreateGuard(lease);
@@ -355,7 +351,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Scorecard 2099",
-            Scope = ScorecardScope.Corporate
         });
         await lease.Context.SaveChangesAsync();
         var guard = CreateGuard(lease);
@@ -435,7 +430,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Historical 2099",
-            Scope = ScorecardScope.Corporate
         };
         lease.Context.Scorecards.Add(scorecard);
         await lease.Context.SaveChangesAsync();
@@ -455,7 +449,6 @@ public class FiscalYearLifecycleGuardTests
             Id = Guid.NewGuid(),
             FiscalYearId = year.Id,
             Name = "Scorecard 2099",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "KRA", Weight = 100 };

@@ -43,7 +43,6 @@ public class CloseScorecardCommandHandler : IRequestHandler<CloseScorecardComman
                 FiscalYearId = scorecard.FiscalYearId,
                 Name = scorecard.Name,
                 Description = scorecard.Description,
-                Scope = scorecard.Scope,
                 ScorecardStatus = scorecard.ScorecardStatus
             }
         };

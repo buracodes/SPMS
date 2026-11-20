@@ -24,12 +24,17 @@ public class InitiativeController : ControllerBase
         mediator = _mediator;
     }
 
-    // Milestone, progress, dependency, expenditure and closure endpoints are gated on the
-    // InitiativesView policy, not on the fine-grained permissions. InitiativeGuard applies the real
-    // rule for those actions - the permission, the edit permission, or ownership of that specific
-    // initiative - and returns a descriptive 403. Gating them on the permission here instead made
-    // the guard's owner allowance unreachable: an owner holding only view was rejected by the
-    // policy before the handler ran, and the UI (which mirrors the guard) showed no controls.
+    // Milestone, progress, dependency, expenditure and closure endpoints are gated on the read
+    // policy (InitiativesView OR DivisionInitiativeView), not on a fine-grained write permission.
+    // InitiativeGuard applies the real rule for those actions - the permission, the edit permission,
+    // or ownership of that specific initiative - and returns a descriptive 403.
+    //
+    // Reading must include the division right: every active HR employee (including Data Input
+    // users) receives DivisionInitiativeView as a baseline, but a Data Input user who is the
+    // assigned owner has no InitiativesView at all. Gating these endpoints on that corporate
+    // permission alone rejected the owner in the policy layer before the guard could grant them
+    // access, which is exactly the FR-403 ownership allowance. The guard still refuses every
+    // non-owner who holds no write permission, so widening only the read gate is safe.
     //
     // The exceptions are Update (initiative details), Create and Delete, which stay on their
     // fine-grained policies: owners are never authorised for those.
@@ -127,7 +132,7 @@ public class InitiativeController : ControllerBase
     /// that the edit policy above protects.
     /// </summary>
     [HttpPut("{id:guid}/expenditure")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> UpdateExpenditure(Guid id, [FromBody] UpdateInitiativeExpenditureCommandRequest request)
     {
         if (request.Id == Guid.Empty)
@@ -156,7 +161,7 @@ public class InitiativeController : ControllerBase
     }
 
     [HttpPost("{initiativeId:guid}/milestones")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<MilestoneDto>>> CreateMilestone(Guid initiativeId, [FromBody] CreateMilestoneCommandRequest request)
     {
         if (request.InitiativeId == Guid.Empty)
@@ -169,7 +174,7 @@ public class InitiativeController : ControllerBase
     }
 
     [HttpPut("{initiativeId:guid}/milestones/{id:guid}")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<MilestoneDto>>> UpdateMilestone(Guid initiativeId, Guid id, [FromBody] UpdateMilestoneCommandRequest request)
     {
         if (request.Id == Guid.Empty)
@@ -187,7 +192,7 @@ public class InitiativeController : ControllerBase
     }
 
     [HttpDelete("{initiativeId:guid}/milestones/{id:guid}")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<IActionResult> DeleteMilestone(Guid initiativeId, Guid id)
     {
         await mediator.Send(new DeleteMilestoneCommandRequest { Id = id, InitiativeId = initiativeId });
@@ -199,7 +204,7 @@ public class InitiativeController : ControllerBase
     /// client never has to compute overall progress itself.
     /// </summary>
     [HttpPost("{initiativeId:guid}/milestones/{id:guid}/progress")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> UpdateMilestoneProgress(
         Guid initiativeId,
         Guid id,
@@ -230,7 +235,7 @@ public class InitiativeController : ControllerBase
     /// assigned owner an authorised closer.
     /// </summary>
     [HttpPost("{initiativeId:guid}/close")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> Close(Guid initiativeId, [FromBody] CloseInitiativeDto dto)
     {
         if (dto == null)
@@ -265,7 +270,7 @@ public class InitiativeController : ControllerBase
     /// (edit/close permission or ownership), and the lifecycle guard centralizes the transition rules.
     /// </summary>
     [HttpPost("{initiativeId:guid}/hold")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> Hold(Guid initiativeId, [FromBody] PutInitiativeOnHoldCommandRequest request)
     {
         if (request.InitiativeId == Guid.Empty)
@@ -279,7 +284,7 @@ public class InitiativeController : ControllerBase
 
     /// <summary>FRD lifecycle: resumes work on an initiative that was on hold.</summary>
     [HttpPost("{initiativeId:guid}/resume")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> Resume(Guid initiativeId, [FromBody] ResumeInitiativeCommandRequest request)
     {
         if (request.InitiativeId == Guid.Empty)
@@ -297,7 +302,7 @@ public class InitiativeController : ControllerBase
     /// owner-cancel workflow is an open decision tracked separately).
     /// </summary>
     [HttpPost("{initiativeId:guid}/cancel")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> Cancel(Guid initiativeId, [FromBody] CancelInitiativeCommandRequest request)
     {
         if (request.InitiativeId == Guid.Empty)
@@ -311,7 +316,7 @@ public class InitiativeController : ControllerBase
 
     /// <summary>Adds a prerequisite link. Self-references, duplicates and cycles are rejected.</summary>
     [HttpPost("{initiativeId:guid}/dependencies")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> AddDependency(Guid initiativeId, [FromBody] AddInitiativeDependencyCommandRequest request)
     {
         if (request.InitiativeId == Guid.Empty)
@@ -324,7 +329,7 @@ public class InitiativeController : ControllerBase
     }
 
     [HttpDelete("{initiativeId:guid}/dependencies/{dependsOnInitiativeId:guid}")]
-    [Authorize(Policy = Permissions.InitiativesView)]
+    [Authorize(Policy = AnyPermissionPolicyNames.InitiativeRead)]
     public async Task<ActionResult<Response<InitiativeDto>>> RemoveDependency(Guid initiativeId, Guid dependsOnInitiativeId)
     {
         var result = await mediator.Send(new RemoveInitiativeDependencyCommandRequest

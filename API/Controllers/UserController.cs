@@ -78,6 +78,10 @@ public class UserController : ControllerBase
                 EmployeeCode = employee.IdCode,
                 PositionName = employee.PositionName,
                 PositionLevel = employee.PositionLevel,
+                FirstName = employee.FirstName,
+                FatherName = employee.MiddleName,
+                GrandfatherName = employee.LastName,
+                DepartmentName = employee.DepartmentName,
                 Roles = new List<string>()
             })
             .ToList();

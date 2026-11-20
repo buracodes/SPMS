@@ -1845,9 +1845,6 @@ namespace Infrastructure.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
-                    b.Property<int>("Scope")
-                        .HasColumnType("int");
-
                     b.Property<int>("ScorecardStatus")
                         .HasColumnType("int");
 

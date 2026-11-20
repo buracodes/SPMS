@@ -22,7 +22,7 @@ public class KpiIntegrityRuleTests
     private static (FiscalYear Year, Scorecard Scorecard, Goal Goal, Kra Kra, Division Division) SeedHierarchy(TestDbContextLease lease)
     {
         var year = new FiscalYear { Id = Guid.NewGuid(), Label = "FY2026", StartDate = new DateTime(2026, 7, 1), EndDate = new DateTime(2027, 6, 30) };
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "Corporate 2026", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "Corporate 2026" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow volume", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Win mandates", Weight = 100 };
         var division = new Division { Id = DefaultDivisionOwnerId, Name = "Trading", Code = "TRD" };

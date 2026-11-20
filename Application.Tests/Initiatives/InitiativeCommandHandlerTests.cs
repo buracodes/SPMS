@@ -246,6 +246,48 @@ var log = Assert.Single(await lease.Context.InitiativeUpdateLogs.AsNoTracking().
     }
 
     [Fact]
+    public async Task UpdateMilestoneProgress_PowerUserWhoIsNotTheOwner_IsAllowed()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var owner = await SeedUserAsync(lease, "Owner One");
+        var powerUser = await SeedUserAsync(lease, "Power User");
+        var initiative = await SeedInitiativeAsync(lease, owner);
+        var milestone = await SeedMilestoneAsync(lease, initiative, 100m, 0);
+
+        // FR-403's other authorised actor: the permission holder, who need not own the initiative.
+        var user = new TestCurrentUserService
+        {
+            UserId = powerUser.Id,
+            UserName = "power",
+            Roles = new[] { "PowerUser" },
+            Permissions = new[] { Domain.Constants.Permissions.InitiativesUpdateProgress }
+        };
+        var handler = new UpdateMilestoneProgressCommandHandler(
+            new InitiativeRepository(lease.Context),
+            new MilestoneRepository(lease.Context),
+            new InitiativeUpdateLogRepository(lease.Context),
+            new SpmsUnitOfWork(lease.Context),
+            BuildGuard(lease, user),
+            BuildFactory(),
+            user);
+
+        var response = await handler.Handle(
+            new UpdateMilestoneProgressCommandRequest
+            {
+                Dto = new UpdateMilestoneProgressDto
+                {
+                    InitiativeId = initiative.Id,
+                    MilestoneId = milestone.Id,
+                    CompletionPercentage = 80
+                }
+            },
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(80, response.Data.Milestones.Single().CompletionPercentage);
+    }
+
+    [Fact]
     public async Task UpdateMilestoneProgress_ReachesOneHundred_CompletesInitiative()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
@@ -370,7 +412,7 @@ Assert.Equal(100m, response.Data.ProgressPercentage);
             },
             CancellationToken.None);
 
-        // 100% starts the initiative but does not complete it — closure still owns Completed.
+        // 100% starts the initiative but does not complete it â€” closure still owns Completed.
         Assert.Equal(InitiativeStatus.InProgress, response.Data.Status);
         Assert.True(response.Data.IsReadyForCompletion);
         Assert.NotEqual(InitiativeStatus.Completed, response.Data.Status);
@@ -873,7 +915,7 @@ Assert.Equal(100m, response.Data.ProgressPercentage);
 
     /// <summary>
     /// FR-401: editing an initiative whose recorded start date is already in the past must stay
-    /// possible — the no-backdating rule never applies to an unchanged historical start date.
+    /// possible â€” the no-backdating rule never applies to an unchanged historical start date.
     /// </summary>
     [Fact]
     public async Task Update_AllowsUnrelatedEditsWhenTheStartDateIsInThePast()
@@ -1283,7 +1325,7 @@ Assert.Equal(100m, response.Data.ProgressPercentage);
         await using var lease = await TestDbContextFactory.CreateAsync();
         var owner = await SeedUserAsync(lease, "Owner One");
 
-        // A real Goal → KRA → KPI hierarchy so the ids satisfy the foreign keys.
+        // A real Goal â†’ KRA â†’ KPI hierarchy so the ids satisfy the foreign keys.
         var fiscalYear = new FiscalYear
         {
             Id = Guid.NewGuid(),
@@ -1291,7 +1333,7 @@ Assert.Equal(100m, response.Data.ProgressPercentage);
             StartDate = new DateTime(2026, 1, 1),
             EndDate = new DateTime(2026, 12, 31)
         };
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Corporate" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow revenue", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Digital channels", Weight = 100 };
         var kpi = new Kpi
@@ -1920,7 +1962,7 @@ Assert.Equal(100m, response.Data.ProgressPercentage);
 
     /// <summary>
     /// FR-405: an initiative must have run for at least one day, so the actual end date has to be
-    /// strictly later than the start date — an end date on the same day is not a completed delivery.
+    /// strictly later than the start date â€” an end date on the same day is not a completed delivery.
     /// </summary>
     [Fact]
     public async Task Close_RejectsAnActualEndDateEqualToTheStartDate()

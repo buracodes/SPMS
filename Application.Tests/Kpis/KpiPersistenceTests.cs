@@ -19,7 +19,6 @@ public class KpiPersistenceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
         var kra = new Kra
@@ -86,7 +85,6 @@ public class KpiPersistenceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Test KRA", Weight = 100 };
@@ -115,7 +113,6 @@ public class KpiPersistenceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
         var kraA = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "KRA A", Weight = 50 };
@@ -143,8 +140,8 @@ public class KpiPersistenceTests
         var service = new FiscalCalendarService();
         var fiscalYear = service.CreateFiscalYear(2025);
 
-        var scorecard1 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Scorecard A", Scope = ScorecardScope.Corporate };
-        var scorecard2 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Scorecard B", Scope = ScorecardScope.Division };
+        var scorecard1 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Scorecard A" };
+        var scorecard2 = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Scorecard B" };
         var goal1 = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard1.Id, Name = "Goal A", Weight = 100 };
         var goal2 = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard2.Id, Name = "Goal B", Weight = 100 };
         var kra1 = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard1.Id, GoalId = goal1.Id, Name = "KRA A", Weight = 100 };
@@ -176,7 +173,6 @@ public class KpiPersistenceTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
         var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Test KRA", Weight = 100 };

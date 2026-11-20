@@ -25,7 +25,7 @@ public class CloneScorecardHandlerTests
         var sourcePeriods = service.GeneratePeriods(sourceYear);
         var targetPeriods = service.GeneratePeriods(targetYear);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = sourceYear.Id, Name = "ECX Corporate Strategy 2025", Description = "Original", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = sourceYear.Id, Name = "ECX Corporate Strategy 2025", Description = "Original" };
         var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 60 };
         var kra = new Kra { Id = Guid.NewGuid(), GoalId = goal.Id, ScorecardId = scorecard.Id, Name = "Market Share", Weight = 100, UnitMeasure = "%" };
         var parentKpi = new Kpi
@@ -118,7 +118,6 @@ public class CloneScorecardHandlerTests
         Assert.Equal("ECX Corporate Strategy 2026", newScorecard.Name);
         Assert.Equal(ScorecardStatus.Active, newScorecard.ScorecardStatus);
         Assert.Equal("Original", newScorecard.Description);
-        Assert.Equal(ScorecardScope.Corporate, newScorecard.Scope);
 
         // Hierarchy fully cloned with weights preserved.
         var newGoal = await lease.Context.Goals.SingleAsync(g => g.ScorecardId == newScorecard.Id);
@@ -190,7 +189,7 @@ public class CloneScorecardHandlerTests
         var fixture = await CreateFixture(lease);
         var (handler, _) = CreateHandler(lease);
 
-        lease.Context.Scorecards.Add(new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fixture.TargetFiscalYearId, Name = "ECX Corporate Strategy 2025", Scope = ScorecardScope.Corporate });
+        lease.Context.Scorecards.Add(new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fixture.TargetFiscalYearId, Name = "ECX Corporate Strategy 2025" });
         await lease.Context.SaveChangesAsync();
 
         await Assert.ThrowsAsync<BadRequestException>(() =>
@@ -261,7 +260,7 @@ public class CloneScorecardHandlerTests
         var sourcePeriods = calendar.GeneratePeriods(sourceYear);
         var targetPeriods = calendar.GeneratePeriods(targetYear);
 
-        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = sourceYear.Id, Name = "Punct Strategy", Scope = ScorecardScope.Corporate };
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = sourceYear.Id, Name = "Punct Strategy" };
 
         // Under the old normalization both names collapsed to "Grow Revenue", so the second
         // goal was silently dropped. They are distinct rows and must both survive the clone

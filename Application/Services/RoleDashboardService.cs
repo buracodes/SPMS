@@ -1,5 +1,6 @@
 using Application.DTOS.Dashboard;
 using Application.Dashboard;
+using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Domain.Constants;
@@ -311,6 +312,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
         public IReadOnlyList<FiscalPeriod> Periods { get; set; } = Array.Empty<FiscalPeriod>();
         public IReadOnlyList<Scorecard> Scorecards { get; set; } = Array.Empty<Scorecard>();
         public Scorecard? SelectedScorecard { get; set; }
+        public bool ScorecardSelectionRequired { get; set; }
+        public IReadOnlyList<Scorecard> SelectableScorecards { get; set; } = Array.Empty<Scorecard>();
         public IReadOnlyList<Goal> Goals { get; set; } = Array.Empty<Goal>();
 
         /// <summary>Division goals of the employee's own plan; empty for organization scope.</summary>
@@ -470,15 +473,30 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
 
         load.Scorecards = inYear;
 
-        // A scorecard request is only honoured when the scorecard is inside the caller's
-        // scope; anything else falls back to the default selection instead of failing.
-        var requestedScorecard = filter?.ScorecardId is Guid requestedScorecardId
-            ? inYear.FirstOrDefault(s => s.Id == requestedScorecardId)
-            : null;
+        // An explicit scorecard outside the caller's scope is rejected; it is never silently
+        // replaced with a different scorecard.
+        if (filter?.ScorecardId is Guid requestedScorecardId
+            && !inYear.Any(s => s.Id == requestedScorecardId))
+        {
+            throw new ForbiddenException("You do not have access to this scorecard.");
+        }
 
-        load.SelectedScorecard = requestedScorecard
-            ?? inYear.FirstOrDefault(s => s.ScorecardStatus == ScorecardStatus.Active)
-            ?? inYear.FirstOrDefault();
+        if (filter?.ScorecardId is Guid selectedScorecardId)
+        {
+            load.SelectedScorecard = inYear.First(s => s.Id == selectedScorecardId);
+        }
+        else if (inYear.Count > 1)
+        {
+            // Multiple independent scorecards may share a fiscal year (FR-301). Ask the caller
+            // to choose rather than auto-picking one by status or name.
+            load.ScorecardSelectionRequired = true;
+            load.SelectableScorecards = inYear;
+            return load;
+        }
+        else
+        {
+            load.SelectedScorecard = inYear.FirstOrDefault();
+        }
 
         if (load.SelectedScorecard is null)
         {
@@ -602,8 +620,8 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
 
             load.PeriodResults = periodResults;
 
-            var selectedScorecardId = selectedScorecard.Id;
-            if (periodResults.TryGetValue(selectedScorecardId, out var selectedResult))
+            var periodSelectedScorecardId = selectedScorecard.Id;
+            if (periodResults.TryGetValue(periodSelectedScorecardId, out var selectedResult))
             {
                 load.SelectedPeriodResult = selectedResult;
 
@@ -611,7 +629,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
                 if (periodType != PeriodType.Year)
                 {
                     load.SelectedYearResult = await scorePeriodCalculationService.CalculateAsync(
-                        selectedScorecardId,
+                        periodSelectedScorecardId,
                         fiscalYear.Id,
                         PeriodType.Year,
                         null,
@@ -735,6 +753,17 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             ScorecardName = load.SelectedScorecard?.Name,
             PeriodLabel = PeriodLabel(scope, fiscalYear, load.SelectedScorecard?.Name),
             FiscalYearClosed = fiscalYear is not null && fiscalYear.FiscalYearStatus != FiscalYearStatus.Open,
+            ScorecardSelectionRequired = load.ScorecardSelectionRequired,
+            SelectableScorecards = load.SelectableScorecards
+                .OrderBy(s => s.Name)
+                .ThenBy(s => s.Id)
+                .Select(s => new DashboardFilterOptionDto
+                {
+                    Id = s.Id,
+                    Label = s.Name,
+                    IsSelected = false
+                })
+                .ToList(),
             FromMonth = scope?.FromMonth,
             ToMonth = scope?.ToMonth,
             Quarter = scope is { Granularity: SnapshotGranularity.Quarter } s ? s.Quarter : null
@@ -782,8 +811,7 @@ public sealed partial class RoleDashboardService : IRoleDashboardService
             {
                 Id = s.Id,
                 Label = s.Name,
-                IsSelected = load.SelectedScorecard?.Id == s.Id,
-                Detail = s.Scope.ToString()
+                IsSelected = load.SelectedScorecard?.Id == s.Id
             })
             .ToList();
 

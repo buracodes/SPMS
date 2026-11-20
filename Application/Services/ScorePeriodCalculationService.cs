@@ -93,7 +93,7 @@ public sealed class ScorePeriodCalculationService : IScorePeriodCalculationServi
             kpiPeriods[kpi.Id] = ComputeKpiPeriod(kpi, scope, targetsByKpi, actualByKpiMonth);
         }
 
-        // Build Kra → GoalId + Weight mapping from KPI nav properties
+        // Build Kra â†’ GoalId + Weight mapping from KPI nav properties
         var kraInfo = new Dictionary<Guid, (Guid GoalId, decimal Weight)>();
         foreach (var kpi in kpis)
         {

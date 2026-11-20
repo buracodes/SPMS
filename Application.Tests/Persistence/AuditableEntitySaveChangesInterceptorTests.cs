@@ -26,7 +26,6 @@ public class AuditableEntitySaveChangesInterceptorTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYear.Id,
             Name = "Test Scorecard",
-            Scope = ScorecardScope.Corporate
         };
 
         lease.Context.FiscalYears.Add(fiscalYear);

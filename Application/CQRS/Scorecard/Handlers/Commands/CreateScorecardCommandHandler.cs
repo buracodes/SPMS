@@ -40,7 +40,6 @@ public class CreateScorecardCommandHandler : IRequestHandler<CreateScorecardComm
             FiscalYearId = request.FiscalYearId,
             Name = request.Name.Trim(),
             Description = request.Description,
-            Scope = request.Scope,
             ScorecardStatus = Domain.Enums.ScorecardStatus.Active
         };
 
@@ -59,7 +58,6 @@ public class CreateScorecardCommandHandler : IRequestHandler<CreateScorecardComm
                 FiscalYearId = scorecard.FiscalYearId,
                 Name = scorecard.Name,
                 Description = scorecard.Description,
-                Scope = scorecard.Scope,
                 ScorecardStatus = scorecard.ScorecardStatus
             }
         };

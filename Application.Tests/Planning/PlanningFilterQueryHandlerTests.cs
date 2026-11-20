@@ -35,14 +35,12 @@ public class PlanningFilterQueryHandlerTests
             Id = Guid.NewGuid(),
             FiscalYearId = year2025.Id,
             Name = "Corporate 2025",
-            Scope = ScorecardScope.Corporate
         };
         var corporate2026 = new Scorecard
         {
             Id = Guid.NewGuid(),
             FiscalYearId = year2026.Id,
             Name = "Corporate 2026",
-            Scope = ScorecardScope.Corporate
         };
 
         var goalA = new Goal { Id = Guid.NewGuid(), ScorecardId = corporate2025.Id, Name = "Grow revenue", Weight = 60 };

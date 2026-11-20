@@ -93,7 +93,7 @@ public class FiscalYearClosureJobTests
     [Fact]
     public async Task DoesNotCloseYear_DuringFinalMonthGracePeriod()
     {
-        // Confirmed business rule (final-month grace): the year — and its scorecards —
+        // Confirmed business rule (final-month grace): the year â€” and its scorecards â€”
         // stay writable until the end date plus seven calendar days (2026-07-07), so the
         // closure job must not close anything on 2026-07-05 even though the end date has
         // already passed.
@@ -197,7 +197,6 @@ public class FiscalYearClosureJobTests
             Id = Guid.NewGuid(),
             FiscalYearId = fiscalYearId,
             Name = name,
-            Scope = ScorecardScope.Corporate
         };
     }
 
