@@ -14,6 +14,8 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
         private readonly IKpiRepository kpiRepository;
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiActualValueRepository kpiActualValueRepository;
+        private readonly IUserRepository userRepository;
+        private readonly IAuditLogEntryRepository auditLogRepository;
         private readonly ICurrentUserService currentUserService;
         private readonly IOrganizationalScopeService organizationalScope;
 
@@ -21,21 +23,30 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             IKpiRepository _kpiRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiActualValueRepository _kpiActualValueRepository,
+            IUserRepository _userRepository,
+            IAuditLogEntryRepository _auditLogRepository,
             ICurrentUserService _currentUserService,
             IOrganizationalScopeService _organizationalScope)
         {
             kpiRepository = _kpiRepository;
             fiscalPeriodRepository = _fiscalPeriodRepository;
             kpiActualValueRepository = _kpiActualValueRepository;
+            userRepository = _userRepository;
+            auditLogRepository = _auditLogRepository;
             currentUserService = _currentUserService;
             organizationalScope = _organizationalScope;
         }
 
         public async Task<Response<ActualValueHistoryDto>> Handle(GetActualValueHistoryQueryRequest request, CancellationToken cancellationToken)
         {
-            var kpi = await kpiRepository.GetById(request.KpiId);
-            if (kpi == null)
+            var kpi = await kpiRepository.GetByIdWithScorecardAsync(request.KpiId);
+            if (kpi == null
+                || kpi.ScorecardId != request.ScorecardId
+                || kpi.Scorecard == null
+                || kpi.DivisionGoalId.HasValue)
             {
+                // One generic not-found response prevents probing another scorecard's KPI or
+                // using a division KPI id on the corporate endpoint.
                 throw new NotFoundException(nameof(Kpi), request.KpiId);
             }
 
@@ -47,36 +58,31 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
                 throw new NotFoundException(nameof(FiscalPeriod), request.FiscalPeriodId);
             }
 
-            var values = await kpiActualValueRepository.GetByKpiAndPeriodAsync(request.KpiId, request.FiscalPeriodId);
-
-            var result = new ActualValueHistoryDto
+            if (kpi.Scorecard.FiscalYearId != period.FiscalYearId)
             {
-                KpiId = request.KpiId,
-                FiscalPeriodId = request.FiscalPeriodId,
-                FiscalMonth = period.FiscalMonth
-            };
-
-            foreach (var value in values)
-            {
-                result.Revisions.Add(new ActualValueDto
-                {
-                    Id = value.Id,
-                    KpiId = value.KpiId,
-                    FiscalPeriodId = value.FiscalPeriodId,
-                    FiscalMonth = period.FiscalMonth,
-                    Quarter = period.Quarter,
-                    Value = value.Value,
-                    DataSource = value.DataSource,
-                    AsOfDate = value.AsOfDate,
-                    Note = value.Note
-                });
+                throw new BadRequestException("The fiscal period does not belong to the KPI's scorecard.");
             }
+
+            // All revisions, including superseded ones: IsCurrent is deliberately not
+            // filtered here. Supersession never sets IsDeleted, so no filter opt-out is
+            // needed for an authorized audit-history view.
+            var values = await kpiActualValueRepository.GetByKpiAndPeriodAsync(request.KpiId, request.FiscalPeriodId);
+            var chain = ActualRevisionHistory.Build(values);
+
+            var history = await ActualHistoryProjection.BuildAsync(
+                auditLogRepository,
+                userRepository,
+                request.ScorecardId,
+                kpi,
+                period,
+                chain,
+                cancellationToken);
 
             return new Response<ActualValueHistoryDto>
             {
                 Success = true,
                 Message = "Actual value history retrieved successfully.",
-                Data = result
+                Data = history
             };
         }
     }

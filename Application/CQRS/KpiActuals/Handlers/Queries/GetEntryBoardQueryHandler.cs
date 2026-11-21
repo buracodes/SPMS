@@ -6,6 +6,7 @@ using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
+using Application.Services;
 using Domain.Entities;
 using MediatR;
 
@@ -28,6 +29,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
         private readonly IKraRepository kraRepository;
         private readonly IKpiTargetRepository kpiTargetRepository;
         private readonly IKpiActualValueRepository kpiActualValueRepository;
+        private readonly IUserRepository userRepository;
         private readonly IOrganizationalScopeService organizationalScope;
 
         public GetEntryBoardQueryHandler(
@@ -39,6 +41,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             IKraRepository _kraRepository,
             IKpiTargetRepository _kpiTargetRepository,
             IKpiActualValueRepository _kpiActualValueRepository,
+            IUserRepository _userRepository,
             IOrganizationalScopeService _organizationalScope)
         {
             kpiRepository = _kpiRepository;
@@ -49,6 +52,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             kraRepository = _kraRepository;
             kpiTargetRepository = _kpiTargetRepository;
             kpiActualValueRepository = _kpiActualValueRepository;
+            userRepository = _userRepository;
             organizationalScope = _organizationalScope;
         }
 
@@ -117,7 +121,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             foreach (var scorecard in scorecardsWithKpis)
             {
                 await AddTargetsAsync(board, scorecard.Id, request.FiscalYearId, kpiIds, monthByPeriodId);
-                await AddActualsAsync(board, scorecard.Id, request.FiscalYearId, kpiIds, monthByPeriodId);
+                await AddActualsAsync(board, scorecard.Id, request.FiscalYearId, kpiIds, monthByPeriodId, cancellationToken);
             }
 
             return Ok(board);
@@ -187,24 +191,24 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             Guid scorecardId,
             Guid fiscalYearId,
             HashSet<Guid> kpiIds,
-            IReadOnlyDictionary<Guid, int> monthByPeriodId)
+            IReadOnlyDictionary<Guid, int> monthByPeriodId,
+            CancellationToken cancellationToken)
         {
+            // The repository returns only current revisions: one effective value per
+            // KPI + fiscal period, regardless of source. The grid must agree with scores.
             var values = await kpiActualValueRepository.GetForScorecardFiscalYearAsync(scorecardId, fiscalYearId);
+            var names = ActualAttributionNames.Resolve(
+                userRepository, values.Select(v => v.RecordedBy));
 
-            // Latest write wins per KPI + fiscal period + data source, exactly as the
-            // per-KPI actuals read reports, so a saved value shows in the grid unchanged.
             var latest = values
                 .Where(v => kpiIds.Contains(v.KpiId))
-                .GroupBy(v => new { v.KpiId, v.FiscalPeriodId, v.DataSource })
-                .Select(g => g.OrderByDescending(v => v.AsOfDate).First())
                 .GroupBy(v => v.KpiId);
 
             foreach (var group in latest)
             {
                 var bundle = new GetActualValuesDto { KpiId = group.Key, FiscalYearId = fiscalYearId };
                 foreach (var value in group
-                             .OrderBy(v => monthByPeriodId.GetValueOrDefault(v.FiscalPeriodId))
-                             .ThenBy(v => v.DataSource))
+                             .OrderBy(v => monthByPeriodId.GetValueOrDefault(v.FiscalPeriodId)))
                 {
                     var month = monthByPeriodId.GetValueOrDefault(value.FiscalPeriodId);
                     bundle.Values.Add(new ActualValueDto
@@ -217,7 +221,10 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
                         Value = value.Value,
                         DataSource = value.DataSource,
                         AsOfDate = value.AsOfDate,
-                        Note = value.Note
+                        Note = value.Note,
+                        RecordedBy = value.RecordedBy,
+                        EnteredByName = value.RecordedBy is Guid id && names.TryGetValue(id, out var name) ? name : null,
+                        CreatedDate = value.CreatedDate
                     });
                 }
 

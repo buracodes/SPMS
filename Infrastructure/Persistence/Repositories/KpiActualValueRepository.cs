@@ -1,6 +1,5 @@
 using Application.Interface.IRepository;
 using Domain.Entities;
-using Domain.Enums;
 using Infrastructure.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,37 +11,22 @@ public class KpiActualValueRepository : GenericRepository<KpiActualValue>, IKpiA
     {
     }
 
-    public async Task SoftDeleteAutomatedSameDayAsync(Guid kpiId, Guid fiscalPeriodId, DateTime utcDay)
+    public async Task<KpiActualValue?> GetCurrentAsync(
+        Guid kpiId, Guid fiscalPeriodId, CancellationToken cancellationToken = default)
     {
-        var dayEnd = utcDay.AddDays(1);
-        var superseded = await context.KpiActualValues
-            .Where(v => v.KpiId == kpiId
-                && v.FiscalPeriodId == fiscalPeriodId
-                && v.DataSource == Domain.Enums.KpiDataSource.Automated
-                && v.AsOfDate >= utcDay && v.AsOfDate < dayEnd)
-            .ToListAsync();
-
-        foreach (var previous in superseded)
-        {
-            previous.IsDeleted = true;
-            previous.UpdatedDate = DateTime.UtcNow;
-        }
-    }
-
-    public async Task<KpiActualValue?> GetLatestAsync(Guid kpiId, Guid fiscalPeriodId, KpiDataSource dataSource)
-    {
+        // Tracked on purpose: the caller marks this row non-current and links it to the
+        // replacement in the same transaction.
         return await context.KpiActualValues
-            .AsNoTracking()
-            .Where(a => a.KpiId == kpiId && a.FiscalPeriodId == fiscalPeriodId && a.DataSource == dataSource)
-            .OrderByDescending(a => a.AsOfDate)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(
+                a => a.KpiId == kpiId && a.FiscalPeriodId == fiscalPeriodId && a.IsCurrent,
+                cancellationToken);
     }
 
     public async Task<KpiActualValue?> GetLatestAsync(Guid kpiId, Guid fiscalPeriodId)
     {
         return await context.KpiActualValues
             .AsNoTracking()
-            .Where(a => a.KpiId == kpiId && a.FiscalPeriodId == fiscalPeriodId)
+            .Where(a => a.KpiId == kpiId && a.FiscalPeriodId == fiscalPeriodId && a.IsCurrent)
             .OrderByDescending(a => a.AsOfDate)
             .FirstOrDefaultAsync();
     }
@@ -50,10 +34,10 @@ public class KpiActualValueRepository : GenericRepository<KpiActualValue>, IKpiA
     public async Task<IReadOnlyList<KpiActualValue>> GetForFiscalYearAsync(Guid kpiId, Guid fiscalYearId)
     {
         return await context.KpiActualValues
-            .Where(a => a.KpiId == kpiId && a.FiscalPeriod!.FiscalYearId == fiscalYearId)
+            .Where(a => a.KpiId == kpiId
+                && a.IsCurrent
+                && a.FiscalPeriod!.FiscalYearId == fiscalYearId)
             .OrderBy(a => a.FiscalPeriod!.FiscalMonth)
-            .ThenBy(a => a.DataSource)
-            .ThenByDescending(a => a.AsOfDate)
             .ToListAsync();
     }
 
@@ -62,14 +46,17 @@ public class KpiActualValueRepository : GenericRepository<KpiActualValue>, IKpiA
         return await context.KpiActualValues
             .AsNoTracking()
             .Include(a => a.FiscalPeriod)
-            .Where(a => a.Kpi!.ScorecardId == scorecardId && a.FiscalPeriod!.FiscalYearId == fiscalYearId)
+            .Where(a => a.IsCurrent
+                && a.Kpi!.ScorecardId == scorecardId
+                && a.FiscalPeriod!.FiscalYearId == fiscalYearId)
             .OrderBy(a => a.FiscalPeriod!.FiscalMonth)
-            .ThenByDescending(a => a.AsOfDate)
             .ToListAsync();
     }
 
     public async Task<IReadOnlyList<KpiActualValue>> GetByKpiAndPeriodAsync(Guid kpiId, Guid fiscalPeriodId)
     {
+        // History deliberately includes superseded revisions. IsDeleted/Status filtering is
+        // left to the global query filter; supersession is represented by IsCurrent only.
         return await context.KpiActualValues
             .AsNoTracking()
             .Where(a => a.KpiId == kpiId && a.FiscalPeriodId == fiscalPeriodId)

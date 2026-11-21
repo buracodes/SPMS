@@ -1,5 +1,3 @@
-using Domain.Enums;
-
 namespace Application.DTOS.KpiActual
 {
     public class EnterActualValueDto
@@ -7,7 +5,6 @@ namespace Application.DTOS.KpiActual
         public Guid KpiId { get; set; }
         public Guid FiscalPeriodId { get; set; }
         public decimal Value { get; set; }
-        public KpiDataSource DataSource { get; set; } = KpiDataSource.Manual;
         public string? Note { get; set; }
 
         /// <summary>

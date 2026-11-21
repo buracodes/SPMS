@@ -4,23 +4,25 @@ namespace Application.Interface.IRepository;
 
 public interface IKpiActualValueRepository : IGenericRepository<KpiActualValue>
 {
-    Task<KpiActualValue?> GetLatestAsync(Guid kpiId, Guid fiscalPeriodId, Domain.Enums.KpiDataSource dataSource);
+    /// <summary>
+    /// Tracked lookup of the one current revision for a KPI + fiscal period. Used by the
+    /// append-only correction path to supersede the previous value inside a transaction.
+    /// </summary>
+    Task<KpiActualValue?> GetCurrentAsync(
+        Guid kpiId, Guid fiscalPeriodId, CancellationToken cancellationToken = default);
 
+    /// <summary>Current revision only, for calculations and current-value reads.</summary>
     Task<KpiActualValue?> GetLatestAsync(Guid kpiId, Guid fiscalPeriodId);
 
     Task<IReadOnlyList<KpiActualValue>> GetForFiscalYearAsync(Guid kpiId, Guid fiscalYearId);
 
     Task<IReadOnlyList<KpiActualValue>> GetForScorecardFiscalYearAsync(Guid scorecardId, Guid fiscalYearId);
 
-    Task<IReadOnlyList<KpiActualValue>> GetByKpiAndPeriodAsync(Guid kpiId, Guid fiscalPeriodId);
-
     /// <summary>
-    /// FR-309 day-dedupe: deactivates (never deletes) every automated actual row of one
-    /// KPI + fiscal period recorded on the same UTC day, so the latest same-day write
-    /// survives. Staged only - the caller commits with SaveChanges together with the new
-    /// write it is about to add.
+    /// All revisions for a KPI + fiscal period, including superseded ones. Intended for
+    /// authorized history access; current-value paths must not use this method.
     /// </summary>
-    Task SoftDeleteAutomatedSameDayAsync(Guid kpiId, Guid fiscalPeriodId, DateTime utcDay);
+    Task<IReadOnlyList<KpiActualValue>> GetByKpiAndPeriodAsync(Guid kpiId, Guid fiscalPeriodId);
 
     Task<bool> AnyForPeriodsAsync(IEnumerable<Guid> fiscalPeriodIds, CancellationToken cancellationToken = default);
 }

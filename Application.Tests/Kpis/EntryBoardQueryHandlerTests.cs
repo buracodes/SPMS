@@ -150,6 +150,7 @@ public class EntryBoardQueryHandlerTests
             new KraRepository(lease.Context),
             new KpiTargetRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
+            new UserRepository(lease.Context),
             scope);
     }
 
@@ -371,12 +372,14 @@ public class EntryBoardQueryHandlerTests
     }
 
     [Fact]
-    public async Task Board_FoldsActualsToLatestWritePerPeriodAndSource()
+    public async Task Board_UsesOnlyCurrentRevisionPerPeriod()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var fixture = await CreateFixtureAsync(lease);
         var monthOne = await lease.Context.FiscalPeriods.SingleAsync(p => p.FiscalMonth == 1);
         var monthTwo = await lease.Context.FiscalPeriods.SingleAsync(p => p.FiscalMonth == 2);
+        var supersededMonthOneId = Guid.NewGuid();
+        var currentMonthOneId = Guid.NewGuid();
 
         lease.Context.KpiActualValues.AddRange(
             new KpiActualValue
@@ -388,25 +391,29 @@ public class EntryBoardQueryHandlerTests
                 DataSource = KpiDataSource.Manual,
                 AsOfDate = new DateTime(2025, 8, 1, 8, 0, 0, DateTimeKind.Utc),
                 Note = "Superseded",
+                IsCurrent = false,
             },
             new KpiActualValue
             {
-                Id = Guid.NewGuid(),
+                Id = currentMonthOneId,
                 KpiId = fixture.AppKpiId,
                 FiscalPeriodId = monthOne.Id,
                 Value = 12m,
                 DataSource = KpiDataSource.Manual,
                 AsOfDate = new DateTime(2025, 8, 3, 8, 0, 0, DateTimeKind.Utc),
                 Note = "Corrected",
+                IsCurrent = true,
+                SupersedesActualId = supersededMonthOneId,
             },
             new KpiActualValue
             {
-                Id = Guid.NewGuid(),
+                Id = supersededMonthOneId,
                 KpiId = fixture.AppKpiId,
                 FiscalPeriodId = monthOne.Id,
                 Value = 11m,
                 DataSource = KpiDataSource.Automated,
                 AsOfDate = new DateTime(2025, 8, 2, 8, 0, 0, DateTimeKind.Utc),
+                IsCurrent = false,
             },
             new KpiActualValue
             {
@@ -416,6 +423,7 @@ public class EntryBoardQueryHandlerTests
                 Value = 20m,
                 DataSource = KpiDataSource.Manual,
                 AsOfDate = new DateTime(2025, 9, 1, 8, 0, 0, DateTimeKind.Utc),
+                IsCurrent = true,
             },
             new KpiActualValue
             {
@@ -425,6 +433,7 @@ public class EntryBoardQueryHandlerTests
                 Value = 5m,
                 DataSource = KpiDataSource.Manual,
                 AsOfDate = new DateTime(2025, 8, 1, 8, 0, 0, DateTimeKind.Utc),
+                IsCurrent = true,
             });
         await lease.Context.SaveChangesAsync();
 
@@ -436,14 +445,14 @@ public class EntryBoardQueryHandlerTests
         var bundle = Assert.Single(response.Data!.Actuals, a => a.KpiId == fixture.AppKpiId);
         Assert.DoesNotContain(response.Data.Actuals, a => a.KpiId == fixture.TradeKpiId);
 
-        // Month 1 keeps one manual (the latest) plus its automated feed; ordered by month, then source.
-        Assert.Equal(3, bundle.Values.Count);
-        Assert.Equal(new[] { 1, 1, 2 }, bundle.Values.Select(v => v.FiscalMonth).ToArray());
-        var latestManual = bundle.Values.Single(v => v.FiscalMonth == 1 && v.DataSource == KpiDataSource.Manual);
-        Assert.Equal(12m, latestManual.Value);
-        Assert.Equal("Corrected", latestManual.Note);
-        Assert.Equal(1, latestManual.Quarter);
-        Assert.Equal(11m, bundle.Values.Single(v => v.DataSource == KpiDataSource.Automated).Value);
+        // One value per period: the current revision only, regardless of historical source.
+        Assert.Equal(2, bundle.Values.Count);
+        Assert.Equal(new[] { 1, 2 }, bundle.Values.Select(v => v.FiscalMonth).ToArray());
+        var current = bundle.Values.Single(v => v.FiscalMonth == 1);
+        Assert.Equal(12m, current.Value);
+        Assert.Equal("Corrected", current.Note);
+        Assert.Equal(1, current.Quarter);
+        Assert.Equal(KpiDataSource.Manual, current.DataSource);
     }
 
     [Fact]

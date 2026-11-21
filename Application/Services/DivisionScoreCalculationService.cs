@@ -93,7 +93,9 @@ public sealed class DivisionScoreCalculationService : IDivisionScoreCalculationS
     private async Task SaveKpiSnapshotAsync(Kpi kpi, Guid scorecardId, Guid fiscalPeriodId, decimal? score, decimal? actualValue, decimal? targetValue)
     {
         var latest = await kpiSnapshotRepository.GetLatestAsync(kpi.Id, fiscalPeriodId, SnapshotGranularity.Month);
-        if (latest?.Score == score)
+        if (latest?.Score == score
+            && latest?.ActualValue == actualValue
+            && latest?.TargetValue == targetValue)
         {
             return;
         }
@@ -115,6 +117,7 @@ public sealed class DivisionScoreCalculationService : IDivisionScoreCalculationS
     private async Task SaveDivisionGoalSnapshotAsync(DivisionGoal divisionGoal, Guid fiscalPeriodId, decimal? score)
     {
         var latest = await divisionSnapshotRepository.GetLatestAsync(divisionGoal.Id, fiscalPeriodId, SnapshotGranularity.Month);
+        // Score is the only persisted value on this snapshot, so it is the complete change set.
         if (latest?.Score == score)
         {
             return;

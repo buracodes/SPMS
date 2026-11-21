@@ -4,6 +4,8 @@ using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
+using Application.Services;
+using Domain.Entities;
 using MediatR;
 
 namespace Application.CQRS.Division.Handlers.Queries;
@@ -15,6 +17,7 @@ public class GetDivisionActualValuesQueryHandler : IRequestHandler<GetDivisionAc
     private readonly IDivisionGoalRepository divisionGoalRepository;
     private readonly IKpiRepository kpiRepository;
     private readonly IKpiActualValueRepository kpiActualValueRepository;
+    private readonly IUserRepository userRepository;
     private readonly IOrganizationalScopeService organizationalScope;
 
     public GetDivisionActualValuesQueryHandler(
@@ -23,15 +26,17 @@ public class GetDivisionActualValuesQueryHandler : IRequestHandler<GetDivisionAc
         IDivisionGoalRepository _divisionGoalRepository,
         IKpiRepository _kpiRepository,
         IKpiActualValueRepository _kpiActualValueRepository,
+        IUserRepository _userRepository,
         IOrganizationalScopeService _organizationalScope)
-        {
-            divisionRepository = _divisionRepository;
-            divisionPlanRepository = _divisionPlanRepository;
-            divisionGoalRepository = _divisionGoalRepository;
-            kpiRepository = _kpiRepository;
-            kpiActualValueRepository = _kpiActualValueRepository;
-            organizationalScope = _organizationalScope;
-        }
+    {
+        divisionRepository = _divisionRepository;
+        divisionPlanRepository = _divisionPlanRepository;
+        divisionGoalRepository = _divisionGoalRepository;
+        kpiRepository = _kpiRepository;
+        kpiActualValueRepository = _kpiActualValueRepository;
+        userRepository = _userRepository;
+        organizationalScope = _organizationalScope;
+    }
 
     public async Task<Response<IReadOnlyList<DivisionActualValueDto>>> Handle(
         GetDivisionActualValuesQueryRequest request,
@@ -58,33 +63,37 @@ public class GetDivisionActualValuesQueryHandler : IRequestHandler<GetDivisionAc
             .Where(k => k.DivisionGoalId != null && goalIds.Contains(k.DivisionGoalId.Value) && !k.IsDeleted)
             .ToList();
 
-        var result = new List<DivisionActualValueDto>();
-
+        // The repository returns only current revisions: one effective value per
+        // KPI + fiscal period across all sources, matching corporate reads and scores.
+        var currentActuals = new List<KpiActualValue>();
         foreach (var kpi in divisionKpis)
         {
-            var actuals = await kpiActualValueRepository.GetForFiscalYearAsync(kpi.Id, request.FiscalYearId);
+            currentActuals.AddRange(
+                await kpiActualValueRepository.GetForFiscalYearAsync(kpi.Id, request.FiscalYearId));
+        }
 
-            var latestPerPeriod = actuals
-                .GroupBy(a => a.FiscalPeriodId)
-                .Select(g => g.OrderByDescending(a => a.AsOfDate).First())
-                .ToList();
+        var names = ActualAttributionNames.Resolve(
+            userRepository, currentActuals.Select(a => a.RecordedBy));
 
-            foreach (var actual in latestPerPeriod)
+        var result = new List<DivisionActualValueDto>(currentActuals.Count);
+        foreach (var actual in currentActuals)
+        {
+            result.Add(new DivisionActualValueDto
             {
-                result.Add(new DivisionActualValueDto
-                {
-                    Id = actual.Id,
-                    DivisionId = divisionId,
-                    KpiId = actual.KpiId,
-                    FiscalPeriodId = actual.FiscalPeriodId,
-                    FiscalMonth = actual.FiscalPeriod?.FiscalMonth ?? 0,
-                    Quarter = actual.FiscalPeriod?.Quarter ?? 0,
-                    Value = actual.Value,
-                    DataSource = actual.DataSource,
-                    AsOfDate = actual.AsOfDate,
-                    Note = actual.Note
-                });
-            }
+                Id = actual.Id,
+                DivisionId = divisionId,
+                KpiId = actual.KpiId,
+                FiscalPeriodId = actual.FiscalPeriodId,
+                FiscalMonth = actual.FiscalPeriod?.FiscalMonth ?? 0,
+                Quarter = actual.FiscalPeriod?.Quarter ?? 0,
+                Value = actual.Value,
+                DataSource = actual.DataSource,
+                AsOfDate = actual.AsOfDate,
+                Note = actual.Note,
+                RecordedBy = actual.RecordedBy,
+                EnteredByName = actual.RecordedBy is Guid id && names.TryGetValue(id, out var name) ? name : null,
+                CreatedDate = actual.CreatedDate
+            });
         }
 
         return new Response<IReadOnlyList<DivisionActualValueDto>>

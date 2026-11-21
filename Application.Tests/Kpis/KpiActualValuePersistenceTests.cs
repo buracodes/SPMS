@@ -2,6 +2,7 @@ using Application.Services;
 using Application.Tests.TestSupport;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Tests.Kpis;
@@ -9,7 +10,7 @@ namespace Application.Tests.Kpis;
 public class KpiActualValuePersistenceTests
 {
     [Fact]
-    public async Task KpiActualValue_LatestWriteWins_ByAsOfDate()
+    public async Task KpiActualValue_CurrentReadIgnoresSupersededRevisions()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var service = new FiscalCalendarService();
@@ -40,62 +41,46 @@ public class KpiActualValuePersistenceTests
         await lease.Context.SaveChangesAsync();
 
         var period = periods.First();
-        var asOf1 = DateTime.UtcNow.AddMinutes(-10);
-        var asOf2 = DateTime.UtcNow.AddMinutes(-5);
-        var asOf3 = DateTime.UtcNow;
-
-        // Manual entry first
-        lease.Context.KpiActualValues.Add(new KpiActualValue
-        {
-            Id = Guid.NewGuid(),
-            KpiId = kpi.Id,
-            FiscalPeriodId = period.Id,
-            Value = 10,
-            DataSource = KpiDataSource.Manual,
-            AsOfDate = asOf1
-        });
-
-        // Automated overwrite
-        lease.Context.KpiActualValues.Add(new KpiActualValue
-        {
-            Id = Guid.NewGuid(),
-            KpiId = kpi.Id,
-            FiscalPeriodId = period.Id,
-            Value = 12,
-            DataSource = KpiDataSource.Automated,
-            AsOfDate = asOf2
-        });
-
-        // Manual correction after automated
-        lease.Context.KpiActualValues.Add(new KpiActualValue
-        {
-            Id = Guid.NewGuid(),
-            KpiId = kpi.Id,
-            FiscalPeriodId = period.Id,
-            Value = 11,
-            DataSource = KpiDataSource.Manual,
-            AsOfDate = asOf3
-        });
-
+        var priorId = Guid.NewGuid();
+        var currentId = Guid.NewGuid();
+        lease.Context.KpiActualValues.AddRange(
+            new KpiActualValue
+            {
+                Id = priorId,
+                KpiId = kpi.Id,
+                FiscalPeriodId = period.Id,
+                Value = 10,
+                DataSource = KpiDataSource.Manual,
+                AsOfDate = DateTime.UtcNow.AddMinutes(-10),
+                IsCurrent = false
+            },
+            new KpiActualValue
+            {
+                Id = currentId,
+                KpiId = kpi.Id,
+                FiscalPeriodId = period.Id,
+                Value = 11,
+                DataSource = KpiDataSource.Manual,
+                AsOfDate = DateTime.UtcNow,
+                IsCurrent = true,
+                SupersedesActualId = priorId
+            });
         await lease.Context.SaveChangesAsync();
 
-        // Latest write wins regardless of source
-        var latestManual = await lease.Context.KpiActualValues
-            .Where(a => a.KpiId == kpi.Id && a.FiscalPeriodId == period.Id && a.DataSource == KpiDataSource.Manual)
-            .OrderByDescending(a => a.AsOfDate)
-            .FirstAsync();
+        var repository = new KpiActualValueRepository(lease.Context);
 
-        var latestAutomated = await lease.Context.KpiActualValues
-            .Where(a => a.KpiId == kpi.Id && a.FiscalPeriodId == period.Id && a.DataSource == KpiDataSource.Automated)
-            .OrderByDescending(a => a.AsOfDate)
-            .FirstAsync();
+        var current = await repository.GetLatestAsync(kpi.Id, period.Id);
+        Assert.NotNull(current);
+        Assert.Equal(11, current.Value);
 
-        Assert.Equal(11, latestManual.Value); // Latest manual write
-        Assert.Equal(12, latestAutomated.Value); // Latest automated write
+        var history = await repository.GetByKpiAndPeriodAsync(kpi.Id, period.Id);
+        Assert.Equal(2, history.Count);
+        Assert.All(history, row => Assert.False(row.IsDeleted));
+        Assert.Equal(priorId, Assert.Single(history, row => row.IsCurrent).SupersedesActualId);
     }
 
     [Fact]
-    public async Task KpiActualValue_GetLatestBySource_RepositoryMethod()
+    public async Task KpiActualValue_RepositoryReturnsExactlyOneCurrentRevision()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var service = new FiscalCalendarService();
@@ -126,27 +111,83 @@ public class KpiActualValuePersistenceTests
         await lease.Context.SaveChangesAsync();
 
         var period = periods.First();
-
-        // Add multiple entries for same source
+        var secondId = Guid.NewGuid();
+        var currentId = Guid.NewGuid();
         lease.Context.KpiActualValues.AddRange(
-            new KpiActualValue { Id = Guid.NewGuid(), KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 5, DataSource = KpiDataSource.Manual, AsOfDate = DateTime.UtcNow.AddDays(-2) },
-            new KpiActualValue { Id = Guid.NewGuid(), KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 7, DataSource = KpiDataSource.Manual, AsOfDate = DateTime.UtcNow.AddDays(-1) },
-            new KpiActualValue { Id = Guid.NewGuid(), KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 6, DataSource = KpiDataSource.Automated, AsOfDate = DateTime.UtcNow }
-        );
-
+            new KpiActualValue { Id = Guid.NewGuid(), KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 5, DataSource = KpiDataSource.Manual, AsOfDate = DateTime.UtcNow.AddDays(-2), IsCurrent = false },
+            new KpiActualValue { Id = secondId, KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 6, DataSource = KpiDataSource.Automated, AsOfDate = DateTime.UtcNow.AddDays(-1), IsCurrent = false },
+            new KpiActualValue { Id = currentId, KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 7, DataSource = KpiDataSource.Manual, AsOfDate = DateTime.UtcNow, IsCurrent = true, SupersedesActualId = secondId });
         await lease.Context.SaveChangesAsync();
 
-        // Use repository to get latest by source
-        var repository = new Infrastructure.Persistence.Repositories.KpiActualValueRepository(lease.Context);
+        var repository = new KpiActualValueRepository(lease.Context);
 
-        var latestManual = await repository.GetLatestAsync(kpi.Id, period.Id, KpiDataSource.Manual);
-        var latestAutomated = await repository.GetLatestAsync(kpi.Id, period.Id, KpiDataSource.Automated);
+        var current = await repository.GetLatestAsync(kpi.Id, period.Id);
+        Assert.NotNull(current);
+        Assert.Equal(7, current.Value);
+        Assert.Equal(KpiDataSource.Manual, current.DataSource);
+        Assert.Equal(secondId, current.SupersedesActualId);
+        Assert.Equal(1, await lease.Context.KpiActualValues.CountAsync(a => a.IsCurrent));
 
-        Assert.NotNull(latestManual);
-        Assert.Equal(7, latestManual.Value); // Latest manual
-        Assert.Equal(DateTime.UtcNow.AddDays(-1).Date, latestManual.AsOfDate.Date);
+        var forYear = await repository.GetForFiscalYearAsync(kpi.Id, fiscalYear.Id);
+        Assert.Single(forYear, a => a.Id == currentId);
+        Assert.DoesNotContain(forYear, a => a.DataSource == KpiDataSource.Automated);
+    }
 
-        Assert.NotNull(latestAutomated);
-        Assert.Equal(6, latestAutomated.Value); // Latest automated
+    [Fact]
+    public async Task FilteredUniqueIndex_RejectsSecondCurrentRevision()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var service = new FiscalCalendarService();
+        var fiscalYear = service.CreateFiscalYear(2025);
+        var periods = service.GeneratePeriods(fiscalYear);
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = fiscalYear.Id, Name = "Test Scorecard" };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Test Goal", Weight = 100 };
+        var kra = new Kra { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, GoalId = goal.Id, Name = "Test KRA", Weight = 100 };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            KraId = kra.Id,
+            Name = "Revenue Growth",
+            Unit = "%",
+            Weight = 100,
+            DataSource = KpiDataSource.Manual,
+            KpiType = KpiType.Lagging
+        };
+
+        lease.Context.FiscalYears.Add(fiscalYear);
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Kras.Add(kra);
+        lease.Context.Kpis.Add(kpi);
+        lease.Context.FiscalPeriods.AddRange(periods);
+        await lease.Context.SaveChangesAsync();
+
+        var period = periods.First();
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = period.Id,
+            Value = 1,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = DateTime.UtcNow,
+            IsCurrent = true
+        });
+        await lease.Context.SaveChangesAsync();
+
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            Id = Guid.NewGuid(),
+            KpiId = kpi.Id,
+            FiscalPeriodId = period.Id,
+            Value = 2,
+            DataSource = KpiDataSource.Automated,
+            AsOfDate = DateTime.UtcNow,
+            IsCurrent = true
+        });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => lease.Context.SaveChangesAsync());
     }
 }

@@ -30,9 +30,17 @@ namespace API.Controllers
 
         [HttpGet("history")]
         [Authorize(Policy = Permissions.ActualsView)]
-        public async Task<ActionResult> History([FromQuery] Guid kpiId, [FromQuery] Guid fiscalPeriodId)
+        public async Task<ActionResult> History(
+            [FromQuery] Guid scorecardId,
+            [FromQuery] Guid kpiId,
+            [FromQuery] Guid fiscalPeriodId)
         {
-            var result = await mediator.Send(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = fiscalPeriodId });
+            var result = await mediator.Send(new GetActualValueHistoryQueryRequest
+            {
+                ScorecardId = scorecardId,
+                KpiId = kpiId,
+                FiscalPeriodId = fiscalPeriodId
+            });
             return Ok(result);
         }
 

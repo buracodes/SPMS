@@ -1,11 +1,13 @@
 using Application.CQRS.KpiActuals.Handlers.Commands;
 using Application.CQRS.KpiActuals.Requests.Commands;
 using Application.DTOS.KpiActual;
+using Application.Interface;
 using Application.Interface.IService;
 using Application.Services;
 using Application.Tests.TestSupport;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
@@ -54,6 +56,54 @@ public class AuditLogReasonCaptureTests
         Assert.Contains(kpiId.ToString(), newValues);
         Assert.Contains(periodId.ToString(), newValues);
         Assert.Contains("42.5", newValues);
+    }
+
+    [Fact]
+    public async Task OverrideReason_IsRecordedOnSupersedeAndReplacementAuditRows()
+    {
+        const string reason = "Approved correction after period close.";
+        var auditContext = new AuditContext();
+        await using var lease = await TestDbContextFactory.CreateAsync(
+            new TestCurrentUserService { UserId = SeededAdminUserId, UserName = "admin" },
+            auditContext);
+        var (kpiId, periodId) = await SeedAsync(lease);
+        var handler = CreateEnterHandler(lease, auditContext);
+
+        var first = await handler.Handle(new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = periodId, Value = 10 }
+        }, CancellationToken.None);
+
+        var auditIdsBeforeCorrection = await lease.Context.AuditLogEntries
+            .Select(a => a.Id)
+            .ToListAsync();
+
+        var correction = await handler.Handle(new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto
+            {
+                KpiId = kpiId,
+                FiscalPeriodId = periodId,
+                Value = 12,
+                OverrideReason = reason
+            }
+        }, CancellationToken.None);
+
+        var allEntries = await lease.Context.AuditLogEntries
+            .Where(a => a.EntityType == nameof(KpiActualValue))
+            .ToListAsync();
+        var correctionEntries = allEntries.Where(a => !auditIdsBeforeCorrection.Contains(a.Id)).ToList();
+
+        Assert.Equal(2, correctionEntries.Count);
+        Assert.All(correctionEntries, e => Assert.Equal(reason, e.Reason));
+        Assert.Equal(correction.Data!.Id.ToString(), Assert.Single(correctionEntries, e => e.Action == AuditAction.Create).EntityId);
+        Assert.Equal(first.Data!.Id.ToString(), Assert.Single(correctionEntries, e => e.Action == AuditAction.Update).EntityId);
+
+        var previous = await lease.Context.KpiActualValues.SingleAsync(v => v.Id == first.Data!.Id);
+        var replacement = await lease.Context.KpiActualValues.SingleAsync(v => v.Id == correction.Data!.Id);
+        Assert.False(previous.IsCurrent);
+        Assert.True(replacement.IsCurrent);
+        Assert.Equal(previous.Id, replacement.SupersedesActualId);
     }
 
     [Fact]
@@ -119,10 +169,12 @@ public class AuditLogReasonCaptureTests
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
+            new UserRepository(lease.Context),
             new TestCurrentUserService { UserId = SeededAdminUserId, UserName = "admin" },
             new TestSpmsJobScheduler(),
             auditContext,
-            new TestEffectivePermissionService());
+            new TestEffectivePermissionService(),
+            new SpmsUnitOfWork(lease.Context));
     }
 
     private static async Task<(Guid KpiId, Guid PeriodId)> SeedAsync(TestDbContextLease lease)

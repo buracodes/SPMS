@@ -1,5 +1,4 @@
 using Application.CQRS.KpiActuals.Requests.Commands;
-using Domain.Enums;
 using FluentValidation;
 
 namespace Application.Validation.KpiActual
@@ -17,9 +16,7 @@ namespace Application.Validation.KpiActual
             RuleFor(x => x.Dto.FiscalPeriodId)
                 .NotEmpty().WithMessage("Fiscal period is required.");
 
-            RuleFor(x => x.Dto.DataSource)
-                .IsInEnum().WithMessage("Invalid data source.")
-                .NotEqual(KpiDataSource.Calculated).WithMessage("Calculated values cannot be entered manually.");
+            // DataSource is intentionally absent: the server always records Manual.
 
             RuleFor(x => x.Dto.Note)
                 .MaximumLength(500).WithMessage("Note must be 500 characters or fewer.");

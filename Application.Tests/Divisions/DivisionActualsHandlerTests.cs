@@ -4,12 +4,14 @@ using Application.CQRS.Division.Requests.Commands;
 using Application.CQRS.Division.Requests.Queries;
 using Application.DTOS.Division;
 using Application.Exceptions;
+using Application.Interface;
 using Application.Interface.IService;
 using Application.Services;
 using Application.Tests.TestSupport;
 using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
@@ -119,10 +121,12 @@ public class DivisionActualsHandlerTests
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
+            new UserRepository(lease.Context),
             currentUserService,
             effectivePermissionService ?? new TestEffectivePermissionService(),
             new TestSpmsJobScheduler(),
-            auditContext ?? new AuditContext());
+            auditContext ?? new AuditContext(),
+            new SpmsUnitOfWork(lease.Context));
 
     private static GetDivisionActualValuesQueryHandler CreateGetHandler(
         TestDbContextLease lease,
@@ -134,6 +138,7 @@ public class DivisionActualsHandlerTests
             new DivisionGoalRepository(lease.Context),
             new KpiRepository(lease.Context),
             new KpiActualValueRepository(lease.Context),
+            new UserRepository(lease.Context),
             organizationalScope ?? ResolveScope(currentUserService));
 
     /// <summary>
@@ -300,6 +305,69 @@ public class DivisionActualsHandlerTests
             .SingleAsync(a => a.EntityType == nameof(KpiActualValue));
         Assert.Equal("Approved year-end correction for the division plan.", entry.Reason);
         Assert.NotEqual(default, entry.PerformedAt);
+    }
+
+    [Fact]
+    public async Task EnterValue_Correction_MatchesCorporateRevisionAndAuditBehavior()
+    {
+        const string reason = "Approved correction after division plan close.";
+        var auditContext = new AuditContext();
+        await using var lease = await TestDbContextFactory.CreateAsync(null, auditContext);
+        var fixture = await CreateFixtureAsync(lease);
+        var account = new TestCurrentUserService { UserId = fixture.CorporateUserId };
+        var handler = CreateEnterHandler(lease, account, auditContext);
+
+        var first = await handler.Handle(new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.DivisionAId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 10
+            }
+        }, CancellationToken.None);
+
+        var auditIdsBeforeCorrection = await lease.Context.AuditLogEntries
+            .Select(a => a.Id)
+            .ToListAsync();
+
+        var correction = await handler.Handle(new EnterDivisionActualValueCommandRequest
+        {
+            Dto = new EnterDivisionActualValueDto
+            {
+                DivisionId = fixture.DivisionAId,
+                KpiId = fixture.KpiId,
+                FiscalPeriodId = fixture.PeriodId,
+                Value = 12,
+                OverrideReason = reason
+            }
+        }, CancellationToken.None);
+
+        var correctionEntries = (await lease.Context.AuditLogEntries
+                .Where(a => a.EntityType == nameof(KpiActualValue))
+                .ToListAsync())
+            .Where(a => !auditIdsBeforeCorrection.Contains(a.Id))
+            .ToList();
+
+        Assert.Equal(2, correctionEntries.Count);
+        Assert.All(correctionEntries, e => Assert.Equal(reason, e.Reason));
+        Assert.Equal(first.Data!.Id.ToString(), Assert.Single(correctionEntries, e => e.Action == AuditAction.Update).EntityId);
+        Assert.Equal(correction.Data!.Id.ToString(), Assert.Single(correctionEntries, e => e.Action == AuditAction.Create).EntityId);
+
+        var rows = await lease.Context.KpiActualValues.AsNoTracking().ToListAsync();
+        var previous = Assert.Single(rows, r => r.Id == first.Data!.Id);
+        var replacement = Assert.Single(rows, r => r.Id == correction.Data!.Id);
+        Assert.False(previous.IsCurrent);
+        Assert.True(replacement.IsCurrent);
+        Assert.Equal(previous.Id, replacement.SupersedesActualId);
+
+        var current = await CreateGetHandler(lease, account).Handle(new GetDivisionActualValuesQueryRequest
+        {
+            DivisionId = fixture.DivisionAId,
+            FiscalYearId = fixture.FiscalYearId
+        }, CancellationToken.None);
+        Assert.Equal(12, Assert.Single(current.Data!).Value);
     }
 
     [Fact]

@@ -1,4 +1,8 @@
+using Application.CQRS.KpiActuals.Handlers.Commands;
+using Application.CQRS.KpiActuals.Requests.Commands;
+using Application.DTOS.KpiActual;
 using Application.DTOS.Report;
+using Application.Interface;
 using Application.Interface.IService;
 using Application.Services;
 using Application.Tests.TestSupport;
@@ -6,6 +10,7 @@ using Domain.Calculation;
 using Domain.Calculation.ScoreStrategies;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
@@ -287,6 +292,116 @@ public class ReportingServiceTests
         var month1Row = result.Rows.Single(r => r[3] == "M1");
         Assert.Equal("120", month1Row[6]);
         Assert.Equal("Green", month1Row[7]);
+    }
+
+    [Fact]
+    public async Task SameScoreActualCorrection_AppendsSnapshot_AndReportShowsNewActualValue()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var year = CreateYear(lease);
+        var period = lease.Context.FiscalPeriods.Local.OrderBy(p => p.FiscalMonth).First();
+
+        var scorecard = new Scorecard { Id = Guid.NewGuid(), FiscalYearId = year.Id, Name = "ECX 2026" };
+        var goal = new Goal { Id = Guid.NewGuid(), ScorecardId = scorecard.Id, Name = "Grow Revenue", Weight = 100 };
+        var kra = new Kra { Id = Guid.NewGuid(), GoalId = goal.Id, ScorecardId = scorecard.Id, Name = "Sales", Weight = 100 };
+        var kpi = new Kpi
+        {
+            Id = Guid.NewGuid(),
+            ScorecardId = scorecard.Id,
+            KraId = kra.Id,
+            Name = "Revenue",
+            Weight = 100,
+            IsActive = true,
+            OptimizationType = KpiOptimizationType.Binary
+        };
+
+        lease.Context.Scorecards.Add(scorecard);
+        lease.Context.Goals.Add(goal);
+        lease.Context.Kras.Add(kra);
+        lease.Context.Kpis.Add(kpi);
+        lease.Context.KpiTargets.Add(new KpiTarget
+        {
+            KpiId = kpi.Id,
+            FiscalPeriodId = period.Id,
+            TargetValue = 100,
+            Granularity = TargetGranularity.Monthly
+        });
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            KpiId = kpi.Id,
+            FiscalPeriodId = period.Id,
+            Value = 120,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = new DateTime(2026, 1, 10),
+            IsCurrent = true
+        });
+        await lease.Context.SaveChangesAsync();
+
+        var calc = new ScoreCalculationService(
+            new KpiRepository(lease.Context),
+            new KraRepository(lease.Context),
+            new GoalRepository(lease.Context),
+            new ScorecardRepository(lease.Context),
+            new KpiTargetRepository(lease.Context),
+            new KpiActualValueRepository(lease.Context),
+            new KpiScoreSnapshotRepository(lease.Context),
+            new KraScoreSnapshotRepository(lease.Context),
+            new GoalScoreSnapshotRepository(lease.Context),
+            new ScorecardScoreSnapshotRepository(lease.Context),
+            new KpiScoreCalculator(new ScoreStrategyFactory()),
+            new KraScoreCalculator(),
+            new GoalScoreCalculator(),
+            new ScorecardScoreCalculator());
+
+        await calc.RecalculateKpiAsync(kpi.Id, period.Id);
+
+        var initialSnapshot = await lease.Context.KpiScoreSnapshots.SingleAsync();
+        Assert.Equal(100, initialSnapshot.Score);
+        Assert.Equal(120, initialSnapshot.ActualValue);
+
+        // Keep the two generated snapshots clearly ordered for GetLatestAsync/report reads.
+        initialSnapshot.CalculatedAt = DateTime.UtcNow.AddMinutes(-1);
+        await lease.Context.SaveChangesAsync();
+
+        var enter = new EnterActualValueCommandHandler(
+            new KpiRepository(lease.Context),
+            new FiscalPeriodRepository(lease.Context),
+            new KpiActualValueRepository(lease.Context),
+            new UserRepository(lease.Context),
+            new TestCurrentUserService(),
+            new TestSpmsJobScheduler(),
+            new AuditContext(),
+            new TestEffectivePermissionService(),
+            new SpmsUnitOfWork(lease.Context));
+
+        var correction = await enter.Handle(new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto { KpiId = kpi.Id, FiscalPeriodId = period.Id, Value = 130 }
+        }, CancellationToken.None);
+        Assert.True(correction.Success);
+
+        // Simulate the recalculation job that the handler enqueues after commit.
+        await calc.RecalculateKpiAsync(kpi.Id, period.Id);
+
+        var snapshots = await lease.Context.KpiScoreSnapshots.OrderBy(s => s.CalculatedAt).ToListAsync();
+        Assert.Equal(2, snapshots.Count);
+        Assert.All(snapshots, s => Assert.Equal(100, s.Score));
+        Assert.Equal(120, snapshots[0].ActualValue);
+        Assert.Equal(130, snapshots[1].ActualValue);
+
+        var result = await CreateService(lease).GenerateAsync(new ReportFilter
+        {
+            ReportType = "scorecard-performance",
+            ScorecardId = scorecard.Id,
+            FiscalYearId = year.Id,
+            Level = "kpi",
+            Granularity = "month"
+        }, cancellationToken: CancellationToken.None);
+
+        var month1Row = result.Rows.Single(r => r[3] == "M1");
+        Assert.Equal("100", month1Row[4]);
+        Assert.Equal("130", month1Row[5]);
+        Assert.Equal("100", month1Row[6]);
     }
 
     [Fact]

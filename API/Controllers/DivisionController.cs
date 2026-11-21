@@ -210,5 +210,28 @@ namespace API.Controllers
             });
             return Ok(result);
         }
+
+        /// <summary>
+        /// Append-only revision history for one division KPI and fiscal period. Uses the same
+        /// ActualsView right as corporate history; handler-level scope checks reject other
+        /// divisions, scorecards, periods and corporate KPIs.
+        /// </summary>
+        [HttpGet("history")]
+        [Authorize(Policy = Permissions.ActualsView)]
+        public async Task<ActionResult> History(
+            [FromQuery] Guid divisionId,
+            [FromQuery] Guid scorecardId,
+            [FromQuery] Guid kpiId,
+            [FromQuery] Guid fiscalPeriodId)
+        {
+            var result = await mediator.Send(new GetDivisionActualValueHistoryQueryRequest
+            {
+                DivisionId = divisionId,
+                ScorecardId = scorecardId,
+                KpiId = kpiId,
+                FiscalPeriodId = fiscalPeriodId
+            });
+            return Ok(result);
+        }
     }
 }

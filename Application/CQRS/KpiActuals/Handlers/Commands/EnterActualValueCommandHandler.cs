@@ -1,10 +1,12 @@
 using Application.CQRS.KpiActuals.Requests.Commands;
 using Application.DTOS.KpiActual;
 using Application.Exceptions;
+using Application.Interface;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Jobs;
 using Application.Responses;
+using Application.Services;
 using Domain.Entities;
 using Domain.Enums;
 using MediatR;
@@ -16,27 +18,33 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
         private readonly IKpiRepository kpiRepository;
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiActualValueRepository kpiActualValueRepository;
+        private readonly IUserRepository userRepository;
         private readonly ICurrentUserService currentUserService;
         private readonly ISpmsJobScheduler jobScheduler;
         private readonly IAuditContext auditContext;
         private readonly IEffectivePermissionService effectivePermissionService;
+        private readonly IUnitOfWork unitOfWork;
 
         public EnterActualValueCommandHandler(
             IKpiRepository _kpiRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiActualValueRepository _kpiActualValueRepository,
+            IUserRepository _userRepository,
             ICurrentUserService _currentUserService,
             ISpmsJobScheduler _jobScheduler,
             IAuditContext _auditContext,
-            IEffectivePermissionService _effectivePermissionService)
+            IEffectivePermissionService _effectivePermissionService,
+            IUnitOfWork _unitOfWork)
         {
             kpiRepository = _kpiRepository;
             fiscalPeriodRepository = _fiscalPeriodRepository;
             kpiActualValueRepository = _kpiActualValueRepository;
+            userRepository = _userRepository;
             currentUserService = _currentUserService;
             jobScheduler = _jobScheduler;
             auditContext = _auditContext;
             effectivePermissionService = _effectivePermissionService;
+            unitOfWork = _unitOfWork;
         }
 
         public async Task<Response<ActualValueDto>> Handle(EnterActualValueCommandRequest request, CancellationToken cancellationToken)
@@ -74,40 +82,67 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
                 throw new BadRequestException("The fiscal period does not belong to the KPI's fiscal year.");
             }
 
+            // Every HTTP entry is a manual correction. DataSource is never taken from the
+            // request body, so a client-supplied "dataSource" cannot create an Automated row.
             var entity = new KpiActualValue
             {
                 Id = Guid.NewGuid(),
                 KpiId = kpi.Id,
                 FiscalPeriodId = period.Id,
                 Value = dto.Value,
-                DataSource = dto.DataSource,
+                DataSource = KpiDataSource.Manual,
                 AsOfDate = DateTime.UtcNow,
                 RecordedBy = currentUserService.UserId,
-                Note = dto.Note
+                Note = dto.Note,
+                IsCurrent = true
             };
-
-            // FR-309 automated feeds store each day's pull as its own record while a
-            // same-day re-poll keeps only the latest value for that day: earlier
-            // automated rows from the same UTC date are deactivated (never deleted)
-            // before the new write.
-            if (dto.DataSource == KpiDataSource.Automated)
-            {
-                // FR-309: a same-day re-poll keeps only the latest value for that day.
-                await kpiActualValueRepository.SoftDeleteAutomatedSameDayAsync(kpi.Id, period.Id, entity.AsOfDate.Date);
-            }
 
             // FR-703: when writing to a closed/locked period the LockAuthorizationBehavior
             // has already required an override reason; carry it into the append-only audit
-            // record so the correction is fully attributable.
-            if (!string.IsNullOrWhiteSpace(dto.OverrideReason))
-            {
-                auditContext.Reason = dto.OverrideReason.Trim();
-            }
+            // record so the correction is fully attributable. Override is authorization,
+            // never a data source.
+            var overrideReason = string.IsNullOrWhiteSpace(dto.OverrideReason)
+                ? null
+                : dto.OverrideReason.Trim();
 
-            await kpiActualValueRepository.Add(entity);
+            await unitOfWork.ExecuteInTransactionAsync(async () =>
+            {
+                var previous = await kpiActualValueRepository.GetCurrentAsync(
+                    kpi.Id, period.Id, cancellationToken);
+
+                if (previous is not null)
+                {
+                    // Append-only correction: retire the old revision first so the filtered
+                    // unique index never sees two current rows. The replacement already points
+                    // back to it, so the FK can be satisfied without a third save.
+                    previous.IsCurrent = false;
+                    entity.SupersedesActualId = previous.Id;
+
+                    if (overrideReason is not null)
+                    {
+                        auditContext.Reason = overrideReason;
+                    }
+
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                }
+
+                // The interceptor clears Reason after each save; re-apply it so the Create
+                // audit row for the replacement carries the same override reason.
+                if (overrideReason is not null)
+                {
+                    auditContext.Reason = overrideReason;
+                }
+
+                await kpiActualValueRepository.AddWithoutSave(entity);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+
+                return true;
+            }, cancellationToken);
 
             jobScheduler.Enqueue<IScoreSnapshotRecalculationJob>(
                 job => job.RecalculateKpiCascadeAsync(kpi.Id, period.Id));
+
+            var enteredByNames = ActualAttributionNames.Resolve(userRepository, new[] { entity.RecordedBy });
 
             var result = new ActualValueDto
             {
@@ -119,7 +154,12 @@ namespace Application.CQRS.KpiActuals.Handlers.Commands
                 Value = entity.Value,
                 DataSource = entity.DataSource,
                 AsOfDate = entity.AsOfDate,
-                Note = entity.Note
+                IsCurrent = entity.IsCurrent,
+                SupersedesActualId = entity.SupersedesActualId,
+                Note = entity.Note,
+                RecordedBy = entity.RecordedBy,
+                EnteredByName = entity.RecordedBy is Guid id && enteredByNames.TryGetValue(id, out var name) ? name : null,
+                CreatedDate = entity.CreatedDate
             };
 
             return new Response<ActualValueDto>

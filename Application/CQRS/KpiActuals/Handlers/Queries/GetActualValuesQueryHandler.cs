@@ -4,6 +4,7 @@ using Application.Exceptions;
 using Application.Interface.IRepository;
 using Application.Interface.IService;
 using Application.Responses;
+using Application.Services;
 using Domain.Entities;
 using MediatR;
 
@@ -15,6 +16,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
         private readonly IFiscalYearRepository fiscalYearRepository;
         private readonly IFiscalPeriodRepository fiscalPeriodRepository;
         private readonly IKpiActualValueRepository kpiActualValueRepository;
+        private readonly IUserRepository userRepository;
         private readonly ICurrentUserService currentUserService;
         private readonly IOrganizationalScopeService organizationalScope;
 
@@ -23,6 +25,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             IFiscalYearRepository _fiscalYearRepository,
             IFiscalPeriodRepository _fiscalPeriodRepository,
             IKpiActualValueRepository _kpiActualValueRepository,
+            IUserRepository _userRepository,
             ICurrentUserService _currentUserService,
             IOrganizationalScopeService _organizationalScope)
         {
@@ -30,6 +33,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             fiscalYearRepository = _fiscalYearRepository;
             fiscalPeriodRepository = _fiscalPeriodRepository;
             kpiActualValueRepository = _kpiActualValueRepository;
+            userRepository = _userRepository;
             currentUserService = _currentUserService;
             organizationalScope = _organizationalScope;
         }
@@ -53,15 +57,11 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
             var periods = await fiscalPeriodRepository.GetByFiscalYearAsync(request.FiscalYearId);
             var periodById = periods.ToDictionary(p => p.Id);
 
+            // The repository returns only current revisions: exactly one per KPI + period,
+            // regardless of source. No per-source folding here.
             var values = await kpiActualValueRepository.GetForFiscalYearAsync(request.KpiId, request.FiscalYearId);
-
-            // Latest write wins per fiscal period per data source.
-            var latestByPeriodAndSource = values
-                .GroupBy(v => new { v.FiscalPeriodId, v.DataSource })
-                .Select(g => g.OrderByDescending(v => v.AsOfDate).First())
-                .OrderBy(v => periodById.GetValueOrDefault(v.FiscalPeriodId)?.FiscalMonth)
-                .ThenBy(v => v.DataSource)
-                .ToList();
+            var names = ActualAttributionNames.Resolve(
+                userRepository, values.Select(v => v.RecordedBy));
 
             var result = new GetActualValuesDto
             {
@@ -69,7 +69,7 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
                 FiscalYearId = request.FiscalYearId
             };
 
-            foreach (var value in latestByPeriodAndSource)
+            foreach (var value in values)
             {
                 var period = periodById.GetValueOrDefault(value.FiscalPeriodId);
                 result.Values.Add(new ActualValueDto
@@ -82,7 +82,10 @@ namespace Application.CQRS.KpiActuals.Handlers.Queries
                     Value = value.Value,
                     DataSource = value.DataSource,
                     AsOfDate = value.AsOfDate,
-                    Note = value.Note
+                    Note = value.Note,
+                    RecordedBy = value.RecordedBy,
+                    EnteredByName = value.RecordedBy is Guid id && names.TryGetValue(id, out var name) ? name : null,
+                    CreatedDate = value.CreatedDate
                 });
             }
 

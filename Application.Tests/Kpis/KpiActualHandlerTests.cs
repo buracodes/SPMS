@@ -4,6 +4,7 @@ using Application.CQRS.KpiActuals.Requests.Commands;
 using Application.CQRS.KpiActuals.Requests.Queries;
 using Application.DTOS.KpiActual;
 using Application.Exceptions;
+using Application.Interface;
 using Application.Interface.IService;
 using Application.Jobs;
 using Application.Services;
@@ -12,6 +13,7 @@ using Application.Validation.KpiActual;
 using Domain.Constants;
 using Domain.Entities;
 using Domain.Enums;
+using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 
@@ -60,26 +62,33 @@ public class KpiActualHandlerTests
         var effective = effectivePermissionService ?? new TestEffectivePermissionService();
         var organizationalScope = new OrganizationalScopeService(user, effective);
         var actualRepo = new KpiActualValueRepository(lease.Context);
+        var userRepo = new UserRepository(lease.Context);
+        var unitOfWork = new SpmsUnitOfWork(lease.Context);
         return (
             new EnterActualValueCommandHandler(
                 new KpiRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
                 actualRepo,
+                userRepo,
                 user,
                 new TestSpmsJobScheduler(),
                 new AuditContext(),
-                effective),
+                effective,
+                unitOfWork),
             new GetActualValuesQueryHandler(
                 new KpiRepository(lease.Context),
                 new FiscalYearRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
                 actualRepo,
+                userRepo,
                 user,
                 organizationalScope),
             new GetActualValueHistoryQueryHandler(
                 new KpiRepository(lease.Context),
                 new FiscalPeriodRepository(lease.Context),
                 actualRepo,
+                userRepo,
+                new AuditLogEntryRepository(lease.Context),
                 user,
                 organizationalScope));
     }
@@ -105,6 +114,36 @@ public class KpiActualHandlerTests
     }
 
     [Fact]
+    public async Task EnterActualValue_AttributionComesFromAuthenticatedPrincipal()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (_, _, _, kpiId) = CreateFixture(lease);
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+
+        var user = new User { Id = Guid.NewGuid(), Username = "jdoe", FullName = "Jane Doe" };
+        lease.Context.Users.Add(user);
+        await lease.Context.SaveChangesAsync();
+
+        var principal = new TestCurrentUserService { UserId = user.Id, UserName = "login-name" };
+        var (enter, get, _) = CreateHandlers(lease, principal);
+
+        var response = await enter.Handle(new EnterActualValueCommandRequest
+        {
+            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 42.5m }
+        }, CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(user.Id, response.Data!.RecordedBy);
+        Assert.Equal("Jane Doe", response.Data.EnteredByName);
+
+        var stored = Assert.Single(await lease.Context.KpiActualValues.ToListAsync());
+        Assert.Equal(user.Id, stored.RecordedBy);
+
+        var read = await get.Handle(new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = period.FiscalYearId }, CancellationToken.None);
+        Assert.Equal("Jane Doe", Assert.Single(read.Data!.Values).EnteredByName);
+    }
+
+    [Fact]
     public async Task EnterActualValue_EnqueuesScoreRecalculationJob_WhenKpiHasKra()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
@@ -117,10 +156,12 @@ public class KpiActualHandlerTests
             new KpiRepository(lease.Context),
             new FiscalPeriodRepository(lease.Context),
             actualRepo,
+            new UserRepository(lease.Context),
             new TestCurrentUserService(),
             scheduler,
             new AuditContext(),
-            new TestEffectivePermissionService());
+            new TestEffectivePermissionService(),
+            new SpmsUnitOfWork(lease.Context));
 
         await enter.Handle(new EnterActualValueCommandRequest
         {
@@ -131,7 +172,7 @@ public class KpiActualHandlerTests
     }
 
     [Fact]
-    public async Task EnterActualValue_LatestWriteWins_SameSource()
+    public async Task EnterActualValue_SupersedesPreviousRevision_AppendOnly()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
@@ -139,12 +180,12 @@ public class KpiActualHandlerTests
 
         var (enter, get, _) = CreateHandlers(lease);
 
-        await enter.Handle(new EnterActualValueCommandRequest
+        var firstResponse = await enter.Handle(new EnterActualValueCommandRequest
         {
             Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 10 }
         }, CancellationToken.None);
 
-        await enter.Handle(new EnterActualValueCommandRequest
+        var secondResponse = await enter.Handle(new EnterActualValueCommandRequest
         {
             Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 15 }
         }, CancellationToken.None);
@@ -153,18 +194,19 @@ public class KpiActualHandlerTests
         Assert.True(response.Success);
         Assert.Equal(15, response.Data!.Values.Single().Value);
 
-        // History preserves both revisions (append-only).
+        // History preserves both revisions (append-only), with an explicit forward link.
         var values = await lease.Context.KpiActualValues.ToListAsync();
         Assert.Equal(2, values.Count);
-
-        var latest = await lease.Context.KpiActualValues
-            .OrderByDescending(v => v.AsOfDate)
-            .FirstAsync();
-        Assert.Equal(15, latest.Value);
+        var previous = Assert.Single(values, v => v.Id == firstResponse.Data!.Id);
+        var replacement = Assert.Single(values, v => v.Id == secondResponse.Data!.Id);
+        Assert.False(previous.IsCurrent);
+        Assert.True(replacement.IsCurrent);
+        Assert.Equal(previous.Id, replacement.SupersedesActualId);
+        Assert.All(values, v => Assert.False(v.IsDeleted));
     }
 
     [Fact]
-    public async Task GetActualValues_ReturnsLatestPerPeriodPerSource()
+    public async Task GetActualValues_ReturnsOneManualCurrentValuePerPeriod()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
@@ -179,7 +221,7 @@ public class KpiActualHandlerTests
 
         await enter.Handle(new EnterActualValueCommandRequest
         {
-            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 12, DataSource = KpiDataSource.Automated }
+            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 12 }
         }, CancellationToken.None);
 
         await enter.Handle(new EnterActualValueCommandRequest
@@ -190,10 +232,11 @@ public class KpiActualHandlerTests
         var response = await get.Handle(new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId }, CancellationToken.None);
 
         Assert.True(response.Success);
-        // Latest write per source: manual = 11, automated = 12.
-        Assert.Equal(2, response.Data!.Values.Count);
-        Assert.Equal(11, response.Data.Values.Single(v => v.DataSource == KpiDataSource.Manual).Value);
-        Assert.Equal(12, response.Data.Values.Single(v => v.DataSource == KpiDataSource.Automated).Value);
+        // Exactly one current revision per KPI + period, and HTTP entry is always Manual.
+        var current = Assert.Single(response.Data!.Values);
+        Assert.Equal(11, current.Value);
+        Assert.Equal(KpiDataSource.Manual, current.DataSource);
+        Assert.Equal(1, await lease.Context.KpiActualValues.CountAsync(v => v.IsCurrent));
     }
 
     [Fact]
@@ -300,7 +343,7 @@ public class KpiActualHandlerTests
     public async Task GetActualValueHistory_ReturnsAllRevisionsDescending()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        var (_, _, _, kpiId) = CreateFixture(lease);
+        var (_, scorecardId, _, kpiId) = CreateFixture(lease);
         var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
 
         var (enter, _, history) = CreateHandlers(lease);
@@ -312,10 +355,10 @@ public class KpiActualHandlerTests
 
         await enter.Handle(new EnterActualValueCommandRequest
         {
-            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 20, DataSource = KpiDataSource.Automated }
+            Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 20 }
         }, CancellationToken.None);
 
-        var response = await history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None);
+        var response = await history.Handle(new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None);
 
         Assert.True(response.Success);
         Assert.Equal(2, response.Data!.Revisions.Count);
@@ -324,21 +367,80 @@ public class KpiActualHandlerTests
     }
 
     [Fact]
+    public async Task ThreeCorrections_KeepOnlyLatestCurrent_AndExposeTraversableHistoryChain()
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (fiscalYearId, scorecardId, _, kpiId) = CreateFixture(lease);
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+
+        var (enter, get, history) = CreateHandlers(lease);
+        var responses = new List<ActualValueDto>();
+        foreach (var value in new[] { 10m, 20m, 30m })
+        {
+            var response = await enter.Handle(new EnterActualValueCommandRequest
+            {
+                Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = value }
+            }, CancellationToken.None);
+
+            Assert.True(response.Success);
+            responses.Add(response.Data!);
+        }
+
+        var rows = await lease.Context.KpiActualValues.AsNoTracking().ToListAsync();
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, row => Assert.False(row.IsDeleted));
+
+        var currentRow = Assert.Single(rows, row => row.IsCurrent);
+        Assert.Equal(responses[2].Id, currentRow.Id);
+        Assert.Equal(responses[1].Id, currentRow.SupersedesActualId);
+
+        var middleRow = Assert.Single(rows, row => row.Id == responses[1].Id);
+        Assert.False(middleRow.IsCurrent);
+        Assert.Equal(responses[0].Id, middleRow.SupersedesActualId);
+
+        var firstRow = Assert.Single(rows, row => row.Id == responses[0].Id);
+        Assert.False(firstRow.IsCurrent);
+        Assert.Null(firstRow.SupersedesActualId);
+
+        var currentResponse = await get.Handle(
+            new GetActualValuesQueryRequest { KpiId = kpiId, FiscalYearId = fiscalYearId },
+            CancellationToken.None);
+        Assert.Equal(30m, Assert.Single(currentResponse.Data!.Values).Value);
+
+        var historyResponse = await history.Handle(
+            new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = kpiId, FiscalPeriodId = period.Id },
+            CancellationToken.None);
+        Assert.Equal(3, historyResponse.Data!.Revisions.Count);
+        Assert.Equal(
+            new[] { responses[2].Id, responses[1].Id, responses[0].Id },
+            historyResponse.Data.Revisions.Select(r => r.Id));
+        Assert.Equal(
+            new[] { 30m, 20m, 10m },
+            historyResponse.Data.Revisions.Select(r => r.Value));
+        Assert.True(historyResponse.Data.Revisions[0].IsCurrent);
+        Assert.Equal(responses[1].Id, historyResponse.Data.Revisions[0].SupersedesActualId);
+        Assert.Equal(responses[0].Id, historyResponse.Data.Revisions[1].SupersedesActualId);
+        Assert.Null(historyResponse.Data.Revisions[2].SupersedesActualId);
+    }
+
+    [Fact]
     public async Task GetActualValueHistory_UnknownKpi_ThrowsNotFound()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        var (_, _, _, kpiId) = CreateFixture(lease);
+        var (_, scorecardId, _, kpiId) = CreateFixture(lease);
         var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
 
         var (_, _, history) = CreateHandlers(lease);
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            history.Handle(new GetActualValueHistoryQueryRequest { KpiId = Guid.NewGuid(), FiscalPeriodId = period.Id }, CancellationToken.None));
+            history.Handle(new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = Guid.NewGuid(), FiscalPeriodId = period.Id }, CancellationToken.None));
     }
 
     [Fact]
-    public void EnterActualValueValidator_RejectsCalculatedSource()
+    public void EnterActualValueValidator_DoesNotAcceptClientDataSource()
     {
+        Assert.Null(typeof(EnterActualValueDto).GetProperty("DataSource"));
+
         var validator = new EnterActualValueValidator();
         var request = new EnterActualValueCommandRequest
         {
@@ -346,15 +448,11 @@ public class KpiActualHandlerTests
             {
                 KpiId = Guid.NewGuid(),
                 FiscalPeriodId = Guid.NewGuid(),
-                Value = 10,
-                DataSource = KpiDataSource.Calculated
+                Value = 10
             }
         };
 
-        var result = validator.Validate(request);
-
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("calculated", StringComparison.OrdinalIgnoreCase));
+        Assert.True(validator.Validate(request).IsValid);
     }
 
     [Fact]
@@ -419,7 +517,7 @@ public class KpiActualHandlerTests
     public async Task GetActualValues_UserOwnedKpiVisibleToOwner()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+        var (fiscalYearId, scorecardId, _, kpiId) = CreateFixture(lease);
 
         var owner = Guid.NewGuid();
         var callerDivision = new Division { Id = Guid.NewGuid(), Name = "Sales", Code = "SAL" };
@@ -436,7 +534,7 @@ public class KpiActualHandlerTests
         Assert.True(response.Success);
 
         var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
-        var historyResponse = await history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None);
+        var historyResponse = await history.Handle(new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None);
         Assert.True(historyResponse.Success);
     }
 
@@ -444,7 +542,7 @@ public class KpiActualHandlerTests
     public async Task GetActualValueHistory_DivisionAccountForeignKpi_ThrowsForbidden()
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
-        var (_, _, _, kpiId) = CreateFixture(lease);
+        var (_, scorecardId, _, kpiId) = CreateFixture(lease);
         var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
 
         var ownedBy = new Division { Id = Guid.NewGuid(), Name = "Operations", Code = "OPS" };
@@ -457,7 +555,7 @@ public class KpiActualHandlerTests
         var (_, _, history) = CreateHandlers(lease, divisionUser);
 
         await Assert.ThrowsAsync<ForbiddenException>(() =>
-            history.Handle(new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None));
+            history.Handle(new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = kpiId, FiscalPeriodId = period.Id }, CancellationToken.None));
     }
 
     // â”€â”€ Organization-wide authority precedes division ownership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -519,10 +617,10 @@ public class KpiActualHandlerTests
     /// <summary>
     /// A KPI on the corporate scorecard owned by a division the caller does not belong to.
     /// </summary>
-    private static async Task<(Guid fiscalYearId, Guid kpiId, Guid periodId)> MakeForeignDivisionKpiAsync(
+    private static async Task<(Guid fiscalYearId, Guid scorecardId, Guid kpiId, Guid periodId)> MakeForeignDivisionKpiAsync(
         TestDbContextLease lease, Guid recordedBy)
     {
-        var (fiscalYearId, _, _, kpiId) = CreateFixture(lease);
+        var (fiscalYearId, scorecardId, _, kpiId) = CreateFixture(lease);
 
         var ownerDivision = new Division { Id = Guid.NewGuid(), Name = "Operations", Code = "OPS" };
         lease.Context.Divisions.Add(ownerDivision);
@@ -538,14 +636,14 @@ public class KpiActualHandlerTests
         await lease.Context.SaveChangesAsync();
 
         var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
-        return (fiscalYearId, kpiId, period.Id);
+        return (fiscalYearId, scorecardId, kpiId, period.Id);
     }
 
     private static async Task AssertForeignDivisionReadAllowedAsync(string[] livePermissions)
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var userId = Guid.NewGuid();
-        var (fiscalYearId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
+        var (fiscalYearId, scorecardId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
 
         var user = DivisionClaimedUser(userId, Guid.NewGuid(), livePermissions);
         var live = LiveGrants(userId, livePermissions);
@@ -557,7 +655,7 @@ public class KpiActualHandlerTests
         Assert.True(response.Success);
 
         var historyResponse = await history.Handle(
-            new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = periodId },
+            new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = kpiId, FiscalPeriodId = periodId },
             CancellationToken.None);
         Assert.True(historyResponse.Success);
     }
@@ -566,7 +664,7 @@ public class KpiActualHandlerTests
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var userId = Guid.NewGuid();
-        var (fiscalYearId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
+        var (fiscalYearId, scorecardId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
 
         var user = DivisionClaimedUser(userId, Guid.NewGuid(), livePermissions);
         var live = LiveGrants(userId, livePermissions);
@@ -579,7 +677,7 @@ public class KpiActualHandlerTests
 
         await Assert.ThrowsAsync<ForbiddenException>(() =>
             history.Handle(
-                new GetActualValueHistoryQueryRequest { KpiId = kpiId, FiscalPeriodId = periodId },
+                new GetActualValueHistoryQueryRequest { ScorecardId = scorecardId, KpiId = kpiId, FiscalPeriodId = periodId },
                 CancellationToken.None));
     }
 
@@ -587,7 +685,7 @@ public class KpiActualHandlerTests
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var userId = Guid.NewGuid();
-        var (_, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
+        var (_, scorecardId, kpiId, periodId) = await MakeForeignDivisionKpiAsync(lease, userId);
 
         var user = DivisionClaimedUser(userId, Guid.NewGuid(), livePermissions);
         var live = LiveGrants(userId, livePermissions);
@@ -635,7 +733,7 @@ public class KpiActualHandlerTests
     {
         await using var lease = await TestDbContextFactory.CreateAsync();
         var userId = Guid.NewGuid();
-        var (fiscalYearId, kpiId, _) = await MakeForeignDivisionKpiAsync(lease, userId);
+        var (fiscalYearId, scorecardId, kpiId, _) = await MakeForeignDivisionKpiAsync(lease, userId);
 
         // The JWT still carries performance:monitor.view, but the live grant was revoked.
         var user = DivisionClaimedUser(
@@ -672,4 +770,93 @@ public class KpiActualHandlerTests
     [Fact]
     public Task EnterActualValue_ViewOnlyWithDivisionClaim_ForeignKpi_ThrowsForbidden()
         => AssertForeignDivisionWriteAsync(ViewOnlyLivePermissions, allowed: false);
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task EnterActualValue_FailureInEitherSaveRollsBackWholeRevisionChange(int failOnSaveCall)
+    {
+        await using var lease = await TestDbContextFactory.CreateAsync();
+        var (_, _, _, kpiId) = CreateFixture(lease);
+        var period = await lease.Context.FiscalPeriods.OrderBy(p => p.FiscalMonth).FirstAsync();
+
+        var priorId = Guid.NewGuid();
+        lease.Context.KpiActualValues.Add(new KpiActualValue
+        {
+            Id = priorId,
+            KpiId = kpiId,
+            FiscalPeriodId = period.Id,
+            Value = 10,
+            DataSource = KpiDataSource.Manual,
+            AsOfDate = DateTime.UtcNow.AddMinutes(-5),
+            IsCurrent = true
+        });
+        await lease.Context.SaveChangesAsync();
+        var auditCountBeforeCorrection = await lease.Context.AuditLogEntries.CountAsync();
+
+        var actualRepo = new KpiActualValueRepository(lease.Context);
+        var enter = new EnterActualValueCommandHandler(
+            new KpiRepository(lease.Context),
+            new FiscalPeriodRepository(lease.Context),
+            actualRepo,
+            new UserRepository(lease.Context),
+            new TestCurrentUserService(),
+            new TestSpmsJobScheduler(),
+            new AuditContext(),
+            new TestEffectivePermissionService(),
+            new FailingUnitOfWork(new SpmsUnitOfWork(lease.Context), failOnSaveCall));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            enter.Handle(new EnterActualValueCommandRequest
+            {
+                Dto = new EnterActualValueDto { KpiId = kpiId, FiscalPeriodId = period.Id, Value = 15 }
+            }, CancellationToken.None));
+
+        lease.Context.ChangeTracker.Clear();
+        var rows = await lease.Context.KpiActualValues.AsNoTracking().ToListAsync();
+        var persisted = Assert.Single(rows);
+        Assert.Equal(priorId, persisted.Id);
+        Assert.True(persisted.IsCurrent);
+        Assert.Null(persisted.SupersedesActualId);
+        Assert.Equal(10, persisted.Value);
+        Assert.Equal(auditCountBeforeCorrection, await lease.Context.AuditLogEntries.CountAsync());
+    }
+
+    /// <summary>
+    /// Fails either save in the retire + insert sequence so the test can prove the two saves
+    /// commit atomically. The real unit of work still owns the transaction and rollback.
+    /// </summary>
+    private sealed class FailingUnitOfWork : IUnitOfWork
+    {
+        private readonly IUnitOfWork inner;
+        private readonly int failOnSaveCall;
+        private int saveCalls;
+
+        public FailingUnitOfWork(IUnitOfWork inner, int failOnSaveCall)
+        {
+            this.inner = inner;
+            this.failOnSaveCall = failOnSaveCall;
+        }
+
+        public Task<TResult> ExecuteInTransactionAsync<TResult>(Func<Task<TResult>> work, CancellationToken cancellationToken = default)
+            => inner.ExecuteInTransactionAsync(work, cancellationToken);
+
+        public Task AddRangeAsync<TEntity>(IEnumerable<TEntity> entities, CancellationToken cancellationToken = default)
+            where TEntity : class
+            => inner.AddRangeAsync(entities, cancellationToken);
+
+        public Task RemoveRangeAsync<TEntity>(IEnumerable<TEntity> entities, CancellationToken cancellationToken = default)
+            where TEntity : class
+            => inner.RemoveRangeAsync(entities, cancellationToken);
+
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (++saveCalls == failOnSaveCall)
+            {
+                throw new InvalidOperationException($"Injected failure during save {failOnSaveCall}.");
+            }
+
+            return inner.SaveChangesAsync(cancellationToken);
+        }
+    }
 }

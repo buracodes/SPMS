@@ -211,7 +211,9 @@ public sealed class ScoreCalculationService : IScoreCalculationService
     private async Task SaveKpiSnapshotAsync(Kpi kpi, Guid fiscalPeriodId, decimal? score, decimal? actualValue, decimal? targetValue)
     {
         var latest = await kpiSnapshotRepository.GetLatestAsync(kpi.Id, fiscalPeriodId, SnapshotGranularity.Month);
-        if (latest?.Score == score)
+        if (latest?.Score == score
+            && latest?.ActualValue == actualValue
+            && latest?.TargetValue == targetValue)
         {
             return;
         }
@@ -233,6 +235,7 @@ public sealed class ScoreCalculationService : IScoreCalculationService
     private async Task SaveKraSnapshotAsync(Kra kra, Guid fiscalPeriodId, decimal? score)
     {
         var latest = await kraSnapshotRepository.GetLatestAsync(kra.Id, fiscalPeriodId, SnapshotGranularity.Month);
+        // Score is the only persisted value on this snapshot, so it is the complete change set.
         if (latest?.Score == score)
         {
             return;
@@ -253,6 +256,7 @@ public sealed class ScoreCalculationService : IScoreCalculationService
     private async Task SaveGoalSnapshotAsync(Goal goal, Guid fiscalPeriodId, decimal? score)
     {
         var latest = await goalSnapshotRepository.GetLatestAsync(goal.Id, fiscalPeriodId, SnapshotGranularity.Month);
+        // Score is the only persisted value on this snapshot, so it is the complete change set.
         if (latest?.Score == score)
         {
             return;
@@ -273,6 +277,7 @@ public sealed class ScoreCalculationService : IScoreCalculationService
     private async Task SaveScorecardSnapshotAsync(Scorecard scorecard, Guid fiscalPeriodId, decimal? score)
     {
         var latest = await scorecardSnapshotRepository.GetLatestAsync(scorecard.Id, fiscalPeriodId, SnapshotGranularity.Month);
+        // Score is the only persisted value on this snapshot, so it is the complete change set.
         if (latest?.Score == score)
         {
             return;

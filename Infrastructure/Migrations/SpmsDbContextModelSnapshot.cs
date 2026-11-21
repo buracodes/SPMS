@@ -1006,6 +1006,9 @@ namespace Infrastructure.Migrations
                     b.Property<Guid>("FiscalPeriodId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<bool>("IsCurrent")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("bit");
 
@@ -1028,6 +1031,9 @@ namespace Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<Guid?>("SupersedesActualId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uniqueidentifier");
 
@@ -1043,6 +1049,12 @@ namespace Infrastructure.Migrations
                     b.HasIndex("FiscalPeriodId");
 
                     b.HasIndex("RecordedBy");
+
+                    b.HasIndex("SupersedesActualId");
+
+                    b.HasIndex("KpiId", "FiscalPeriodId")
+                        .IsUnique()
+                        .HasFilter("[IsCurrent] = 1");
 
                     b.HasIndex("KpiId", "FiscalPeriodId", "DataSource", "AsOfDate");
 
@@ -2657,6 +2669,11 @@ namespace Infrastructure.Migrations
                     b.HasOne("Domain.Entities.User", "Recorder")
                         .WithMany()
                         .HasForeignKey("RecordedBy")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Domain.Entities.KpiActualValue", null)
+                        .WithMany()
+                        .HasForeignKey("SupersedesActualId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("FiscalPeriod");
